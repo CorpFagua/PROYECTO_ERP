@@ -1,0 +1,131 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Usuarios ────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  MANAGER
+  OPERATOR
+  VIEWER
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(OPERATOR)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  movements InventoryMovement[]
+
+  @@map("users")
+}
+
+// ─── Inventario ──────────────────────────────────────────────
+
+model Product {
+  id          String   @id @default(cuid())
+  sku         String   @unique
+  name        String
+  description String?
+  category    String
+  unit        String   @default("unidad")
+  minStock    Int      @default(0) @map("min_stock")
+  maxStock    Int?     @map("max_stock")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  movements  InventoryMovement[]
+  stockLevels StockLevel[]
+
+  @@map("products")
+}
+
+model Warehouse {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  location  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  movements  InventoryMovement[]
+  stockLevels StockLevel[]
+
+  @@map("warehouses")
+}
+
+enum MovementType {
+  IN
+  OUT
+  ADJUSTMENT
+}
+
+model InventoryMovement {
+  id          String       @id @default(cuid())
+  productId   String       @map("product_id")
+  warehouseId String       @map("warehouse_id")
+  type        MovementType
+  quantity    Int
+  reason      String?
+  userId      String       @map("user_id")
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  product   Product   @relation(fields: [productId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([productId])
+  @@index([warehouseId])
+  @@index([createdAt])
+  @@map("inventory_movements")
+}
+
+model StockLevel {
+  id          String   @id @default(cuid())
+  productId   String   @map("product_id")
+  warehouseId String   @map("warehouse_id")
+  quantity    Int      @default(0)
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  product   Product   @relation(fields: [productId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+
+  @@unique([productId, warehouseId])
+  @@map("stock_levels")
+}
+
+// ─── Sistema Inmunológico — Registro de Anomalías ────────────
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model AnomalyLog {
+  id           String   @id @default(cuid())
+  detectorType String   @map("detector_type")
+  severity     Severity
+  description  String
+  metadata     Json?
+  acknowledged Boolean  @default(false)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([severity])
+  @@index([acknowledged])
+  @@index([createdAt])
+  @@map("anomaly_logs")
+}
