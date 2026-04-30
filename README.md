@@ -119,7 +119,17 @@ psql -U postgres -c "CREATE USER erp_user WITH PASSWORD 'erp_password';"
 psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE erp_db TO erp_user;"
 ```
 
-> Si usas otra herramienta (pgAdmin, TablePlus, etc.) ejecuta las mismas sentencias SQL.
+**Permisos adicionales requeridos** (PostgreSQL 15+ restringe el schema `public` y la creación de bases de datos por defecto):
+
+```bash
+# Permite que Prisma cree la shadow database durante migraciones
+psql -U postgres -c "ALTER USER erp_user CREATEDB;"
+
+# Permite operar sobre el schema public en erp_db (requerido desde PG 15)
+psql -U postgres -c "GRANT ALL ON SCHEMA public TO erp_user;" erp_db
+```
+
+> Si omites estos dos comandos, `prisma migrate dev` fallará con `P3014` o `permission denied for schema public`.
 
 ### 3. Backend
 
@@ -161,6 +171,29 @@ Para inspeccionar la base de datos en el navegador:
 ```bash
 npx prisma studio             # http://localhost:5555
 ```
+
+### Aplicar cambios de esquema (tras modificar `schema.prisma`)
+
+Cuando se modifica el esquema o se hace pull con cambios:
+
+```bash
+cd backend-erp
+
+# Genera y aplica la nueva migración
+npx prisma migrate dev --name <descripcion-del-cambio>
+
+# Si solo cambiaron tipos/relaciones sin nueva migración, regenera el cliente
+npx prisma generate
+
+# Reinicia el servidor de desarrollo
+npm run dev
+```
+
+> **Reset completo** (borra todos los datos y vuelve a aplicar migraciones desde cero):
+> ```bash
+> npx prisma migrate reset    # pide confirmación antes de borrar
+> npx prisma db seed          # vuelve a poblar con los datos del dump
+> ```
 
 ### 4. Frontend
 
