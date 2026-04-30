@@ -4,116 +4,141 @@ import * as inventoryService from "./inventory.service.js";
 
 // ─── Schemas ─────────────────────────────────────────────────
 
-const createProductSchema = z.object({
-  sku: z.string().min(1),
-  name: z.string().min(1),
-  description: z.string().optional(),
-  category: z.string().min(1),
-  unit: z.string().optional(),
-  minStock: z.number().int().min(0).optional(),
-  maxStock: z.number().int().min(0).optional(),
+const compraSchema = z.object({
+  fecha: z.string().datetime({ offset: true }).or(z.string().date()),
+  idProducto: z.number().int().positive(),
+  cantidad: z.number().int().positive(),
+  precio: z.number().positive(),
+  idProveedor: z.number().int().positive(),
 });
 
-const updateProductSchema = createProductSchema.partial();
-
-const createMovementSchema = z.object({
-  productId: z.string().cuid(),
-  warehouseId: z.string().cuid(),
-  type: z.enum(["IN", "OUT", "ADJUSTMENT"]),
-  quantity: z.number().int().min(1),
-  reason: z.string().optional(),
-});
-
-const createWarehouseSchema = z.object({
-  name: z.string().min(1),
-  location: z.string().optional(),
+const ventaSchema = z.object({
+  fecha: z.string().datetime({ offset: true }).or(z.string().date()),
+  fechaEntrega: z.string().datetime({ offset: true }).or(z.string().date()),
+  idCanal: z.number().int().positive().optional(),
+  idCliente: z.number().int().positive().optional(),
+  idSucursal: z.number().int().positive().optional(),
+  idEmpleado: z.number().int().positive().optional(),
+  idProducto: z.number().int().positive(),
+  precio: z.number().positive(),
+  cantidad: z.number().int().positive(),
 });
 
 // ─── Productos ───────────────────────────────────────────────
 
-export async function listProducts(req: Request, res: Response, next: NextFunction) {
+export async function listProductos(req: Request, res: Response, next: NextFunction) {
   try {
-    const products = await inventoryService.listProducts({
-      category: req.query.category as string | undefined,
-    });
-    res.json(products);
+    const idTipo = req.query.tipo ? Number(req.query.tipo) : undefined;
+    const productos = await inventoryService.listProductos({ idTipoProducto: idTipo });
+    res.json(productos);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getProduct(req: Request, res: Response, next: NextFunction) {
+export async function getProducto(req: Request, res: Response, next: NextFunction) {
   try {
-    const product = await inventoryService.getProduct(req.params.id);
-    res.json(product);
+    const producto = await inventoryService.getProducto(Number(req.params.id));
+    res.json(producto);
   } catch (err) {
     next(err);
   }
 }
 
-export async function createProduct(req: Request, res: Response, next: NextFunction) {
+export async function listTiposProducto(_req: Request, res: Response, next: NextFunction) {
   try {
-    const data = createProductSchema.parse(req.body);
-    const product = await inventoryService.createProduct(data);
-    res.status(201).json(product);
+    const tipos = await inventoryService.listTiposProducto();
+    res.json(tipos);
   } catch (err) {
     next(err);
   }
 }
 
-export async function updateProduct(req: Request, res: Response, next: NextFunction) {
+// ─── Sucursales ───────────────────────────────────────────────
+
+export async function listSucursales(_req: Request, res: Response, next: NextFunction) {
   try {
-    const data = updateProductSchema.parse(req.body);
-    const product = await inventoryService.updateProduct(req.params.id, data);
-    res.json(product);
+    const sucursales = await inventoryService.listSucursales();
+    res.json(sucursales);
   } catch (err) {
     next(err);
   }
 }
 
-// ─── Bodegas ─────────────────────────────────────────────────
-
-export async function listWarehouses(_req: Request, res: Response, next: NextFunction) {
+export async function getSucursal(req: Request, res: Response, next: NextFunction) {
   try {
-    const warehouses = await inventoryService.listWarehouses();
-    res.json(warehouses);
+    const sucursal = await inventoryService.getSucursal(Number(req.params.id));
+    res.json(sucursal);
   } catch (err) {
     next(err);
   }
 }
 
-export async function createWarehouse(req: Request, res: Response, next: NextFunction) {
+// ─── Proveedores ──────────────────────────────────────────────
+
+export async function listProveedores(_req: Request, res: Response, next: NextFunction) {
   try {
-    const data = createWarehouseSchema.parse(req.body);
-    const warehouse = await inventoryService.createWarehouse(data);
-    res.status(201).json(warehouse);
+    const proveedores = await inventoryService.listProveedores();
+    res.json(proveedores);
   } catch (err) {
     next(err);
   }
 }
 
-// ─── Movimientos ─────────────────────────────────────────────
+// ─── Compras ─────────────────────────────────────────────────
 
-export async function registerMovement(req: Request, res: Response, next: NextFunction) {
+export async function registrarCompra(req: Request, res: Response, next: NextFunction) {
   try {
-    const data = createMovementSchema.parse(req.body);
-    const movement = await inventoryService.registerMovement({
+    const data = compraSchema.parse(req.body);
+    const compra = await inventoryService.registrarCompra({
       ...data,
-      userId: req.user!.userId,
+      fecha: new Date(data.fecha),
     });
-    res.status(201).json(movement);
+    res.status(201).json(compra);
   } catch (err) {
     next(err);
   }
 }
 
-export async function listMovements(req: Request, res: Response, next: NextFunction) {
+export async function listCompras(req: Request, res: Response, next: NextFunction) {
   try {
-    const movements = await inventoryService.listMovements({
-      productId: req.query.productId as string | undefined,
-      warehouseId: req.query.warehouseId as string | undefined,
+    const compras = await inventoryService.listCompras({
+      idProducto: req.query.idProducto ? Number(req.query.idProducto) : undefined,
+      idProveedor: req.query.idProveedor ? Number(req.query.idProveedor) : undefined,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
     });
-    res.json(movements);
+    res.json(compras);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── Ventas ──────────────────────────────────────────────────
+
+export async function registrarVenta(req: Request, res: Response, next: NextFunction) {
+  try {
+    const data = ventaSchema.parse(req.body);
+    const venta = await inventoryService.registrarVenta({
+      ...data,
+      fecha: new Date(data.fecha),
+      fechaEntrega: new Date(data.fechaEntrega),
+      idEmpleado: data.idEmpleado ?? req.user?.empleadoId,
+    });
+    res.status(201).json(venta);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listVentas(req: Request, res: Response, next: NextFunction) {
+  try {
+    const ventas = await inventoryService.listVentas({
+      idProducto: req.query.idProducto ? Number(req.query.idProducto) : undefined,
+      idSucursal: req.query.idSucursal ? Number(req.query.idSucursal) : undefined,
+      idEmpleado: req.query.idEmpleado ? Number(req.query.idEmpleado) : undefined,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+    });
+    res.json(ventas);
   } catch (err) {
     next(err);
   }
@@ -124,7 +149,7 @@ export async function listMovements(req: Request, res: Response, next: NextFunct
 export async function getStockLevels(req: Request, res: Response, next: NextFunction) {
   try {
     const levels = await inventoryService.getStockLevels(
-      req.query.warehouseId as string | undefined
+      req.query.idSucursal ? Number(req.query.idSucursal) : undefined,
     );
     res.json(levels);
   } catch (err) {

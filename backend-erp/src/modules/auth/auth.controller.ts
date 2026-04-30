@@ -6,6 +6,7 @@ const registerSchema = z.object({
   email: z.string().email("Email inválido"),
   password: z.string().min(6, "La contraseña debe tener al menos 6 caracteres"),
   name: z.string().min(1, "El nombre es requerido"),
+  rolId: z.number().int().positive("rolId debe ser un entero positivo"),
 });
 
 const loginSchema = z.object({

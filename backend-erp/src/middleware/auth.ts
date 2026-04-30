@@ -5,7 +5,9 @@ import { env } from "../config/env.js";
 export interface AuthPayload {
   userId: string;
   email: string;
-  role: string;
+  role: string;        // nombre del rol (ej. "VENDEDOR")
+  permisos: string[];  // códigos de permiso (ej. ["inventario:ver", "ventas:crear"])
+  empleadoId?: number;
 }
 
 declare global {
@@ -33,15 +35,22 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
   }
 }
 
-export function authorize(...roles: string[]) {
+/**
+ * Verifica que el usuario tenga al menos uno de los permisos especificados.
+ * Uso: authorize("inventario:crear")  o  authorize("inventario:crear", "inventario:editar")
+ */
+export function authorize(...permisos: string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.user) {
       res.status(401).json({ error: "No autenticado" });
       return;
     }
-    if (roles.length > 0 && !roles.includes(req.user.role)) {
-      res.status(403).json({ error: "Sin permisos suficientes" });
-      return;
+    if (permisos.length > 0) {
+      const tiene = permisos.some((p) => req.user!.permisos.includes(p));
+      if (!tiene) {
+        res.status(403).json({ error: "Sin permisos suficientes" });
+        return;
+      }
     }
     next();
   };

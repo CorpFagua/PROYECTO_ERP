@@ -1,123 +1,218 @@
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../middleware/errorHandler.js";
-import { MovementType } from "@prisma/client";
 
 // ─── Productos ───────────────────────────────────────────────
 
-interface CreateProductInput {
-  sku: string;
-  name: string;
-  description?: string;
-  category: string;
-  unit?: string;
-  minStock?: number;
-  maxStock?: number;
-}
-
-export async function listProducts(filters?: { category?: string; active?: boolean }) {
-  return prisma.product.findMany({
+export async function listProductos(filters?: { idTipoProducto?: number; activo?: boolean }) {
+  return prisma.producto.findMany({
     where: {
-      ...(filters?.category && { category: filters.category }),
-      active: filters?.active ?? true,
+      ...(filters?.idTipoProducto && { idTipoProducto: filters.idTipoProducto }),
+      activo: filters?.activo ?? true,
     },
-    orderBy: { name: "asc" },
+    include: { tipoProducto: true },
+    orderBy: { nombre: "asc" },
   });
 }
 
-export async function getProduct(id: string) {
-  const product = await prisma.product.findUnique({
+export async function getProducto(id: number) {
+  const producto = await prisma.producto.findUnique({
     where: { id },
-    include: { stockLevels: { include: { warehouse: true } } },
+    include: {
+      tipoProducto: true,
+      stockLevels: { include: { sucursal: true } },
+    },
   });
-  if (!product) throw new AppError(404, "Producto no encontrado");
-  return product;
+  if (!producto) throw new AppError(404, "Producto no encontrado");
+  return producto;
 }
 
-export async function createProduct(input: CreateProductInput) {
-  const existing = await prisma.product.findUnique({ where: { sku: input.sku } });
-  if (existing) throw new AppError(409, "Ya existe un producto con ese SKU");
-
-  return prisma.product.create({ data: input });
+export async function listTiposProducto() {
+  return prisma.tipoProducto.findMany({ orderBy: { nombre: "asc" } });
 }
 
-export async function updateProduct(id: string, input: Partial<CreateProductInput>) {
-  await getProduct(id);
-  return prisma.product.update({ where: { id }, data: input });
+// ─── Sucursales ───────────────────────────────────────────────
+
+export async function listSucursales() {
+  return prisma.sucursal.findMany({
+    where: { activa: true },
+    include: { localidad: true },
+    orderBy: { nombre: "asc" },
+  });
 }
 
-// ─── Bodegas ─────────────────────────────────────────────────
-
-export async function listWarehouses() {
-  return prisma.warehouse.findMany({ where: { active: true }, orderBy: { name: "asc" } });
+export async function getSucursal(id: number) {
+  const sucursal = await prisma.sucursal.findUnique({
+    where: { id },
+    include: { localidad: true },
+  });
+  if (!sucursal) throw new AppError(404, "Sucursal no encontrada");
+  return sucursal;
 }
 
-export async function createWarehouse(input: { name: string; location?: string }) {
-  return prisma.warehouse.create({ data: input });
+// ─── Proveedores ──────────────────────────────────────────────
+
+export async function listProveedores() {
+  return prisma.proveedor.findMany({
+    include: { localidad: true },
+    orderBy: { nombre: "asc" },
+  });
 }
 
-// ─── Movimientos de inventario ───────────────────────────────
+// ─── Compras ─────────────────────────────────────────────────
 
-interface CreateMovementInput {
-  productId: string;
-  warehouseId: string;
-  type: MovementType;
-  quantity: number;
-  reason?: string;
-  userId: string;
+interface CreateCompraInput {
+  id?: number;
+  fecha: Date;
+  idProducto: number;
+  cantidad: number;
+  precio: number;
+  idProveedor: number;
 }
 
-export async function registerMovement(input: CreateMovementInput) {
-  // Validar que producto y bodega existan
-  const [product, warehouse] = await Promise.all([
-    prisma.product.findUnique({ where: { id: input.productId } }),
-    prisma.warehouse.findUnique({ where: { id: input.warehouseId } }),
+export async function registrarCompra(input: CreateCompraInput) {
+  const [producto, proveedor] = await Promise.all([
+    prisma.producto.findUnique({ where: { id: input.idProducto } }),
+    prisma.proveedor.findUnique({ where: { id: input.idProveedor } }),
   ]);
-  if (!product) throw new AppError(404, "Producto no encontrado");
-  if (!warehouse) throw new AppError(404, "Bodega no encontrada");
+  if (!producto) throw new AppError(404, "Producto no encontrado");
+  if (!proveedor) throw new AppError(404, "Proveedor no encontrado");
 
-  // Calcular delta
-  const delta =
-    input.type === "IN"
-      ? input.quantity
-      : input.type === "OUT"
-        ? -input.quantity
-        : input.quantity; // ADJUSTMENT usa el valor tal cual (puede ser + o -)
+  // Compra no está vinculada a una sucursal específica (es un ingreso al sistema)
+  // Se actualiza el stock del depósito (sucursal 9 = "Deposito" en el seed)
+  const DEPOSITO_ID = 9;
 
-  // Transacción: crear movimiento + actualizar stock
-  const [movement] = await prisma.$transaction([
-    prisma.inventoryMovement.create({ data: input }),
-    prisma.stockLevel.upsert({
-      where: {
-        productId_warehouseId: {
-          productId: input.productId,
-          warehouseId: input.warehouseId,
-        },
+  const compra = await prisma.$transaction(async (tx) => {
+    const c = await tx.compra.create({
+      data: {
+        fecha: input.fecha,
+        idProducto: input.idProducto,
+        cantidad: input.cantidad,
+        precio: input.precio,
+        idProveedor: input.idProveedor,
       },
-      update: { quantity: { increment: delta } },
-      create: {
-        productId: input.productId,
-        warehouseId: input.warehouseId,
-        quantity: Math.max(0, delta),
-      },
-    }),
-  ]);
+    });
 
-  return movement;
+    await tx.stockLevel.upsert({
+      where: { idProducto_idSucursal: { idProducto: input.idProducto, idSucursal: DEPOSITO_ID } },
+      update: { cantidad: { increment: input.cantidad } },
+      create: { idProducto: input.idProducto, idSucursal: DEPOSITO_ID, cantidad: input.cantidad },
+    });
+
+    return c;
+  });
+
+  return compra;
 }
 
-export async function listMovements(filters?: {
-  productId?: string;
-  warehouseId?: string;
+export async function listCompras(filters?: {
+  idProducto?: number;
+  idProveedor?: number;
   limit?: number;
 }) {
-  return prisma.inventoryMovement.findMany({
+  return prisma.compra.findMany({
     where: {
-      ...(filters?.productId && { productId: filters.productId }),
-      ...(filters?.warehouseId && { warehouseId: filters.warehouseId }),
+      ...(filters?.idProducto && { idProducto: filters.idProducto }),
+      ...(filters?.idProveedor && { idProveedor: filters.idProveedor }),
     },
-    include: { product: true, warehouse: true, user: { select: { name: true, email: true } } },
-    orderBy: { createdAt: "desc" },
+    include: {
+      producto: { include: { tipoProducto: true } },
+      proveedor: true,
+    },
+    orderBy: { fecha: "desc" },
     take: filters?.limit ?? 50,
+  });
+}
+
+// ─── Ventas ──────────────────────────────────────────────────
+
+interface CreateVentaInput {
+  id?: number;
+  fecha: Date;
+  fechaEntrega: Date;
+  idCanal?: number;
+  idCliente?: number;
+  idSucursal?: number;
+  idEmpleado?: number;
+  idProducto: number;
+  precio: number;
+  cantidad: number;
+}
+
+export async function registrarVenta(input: CreateVentaInput) {
+  const producto = await prisma.producto.findUnique({ where: { id: input.idProducto } });
+  if (!producto) throw new AppError(404, "Producto no encontrado");
+
+  if (input.idSucursal) {
+    const stock = await prisma.stockLevel.findUnique({
+      where: { idProducto_idSucursal: { idProducto: input.idProducto, idSucursal: input.idSucursal } },
+    });
+    if (!stock || stock.cantidad < input.cantidad) {
+      throw new AppError(422, "Stock insuficiente en la sucursal");
+    }
+  }
+
+  const venta = await prisma.$transaction(async (tx) => {
+    const v = await tx.venta.create({
+      data: {
+        fecha: input.fecha,
+        fechaEntrega: input.fechaEntrega,
+        idCanal: input.idCanal,
+        idCliente: input.idCliente,
+        idSucursal: input.idSucursal,
+        idEmpleado: input.idEmpleado,
+        idProducto: input.idProducto,
+        precio: input.precio,
+        cantidad: input.cantidad,
+      },
+    });
+
+    if (input.idSucursal) {
+      await tx.stockLevel.update({
+        where: { idProducto_idSucursal: { idProducto: input.idProducto, idSucursal: input.idSucursal } },
+        data: { cantidad: { decrement: input.cantidad } },
+      });
+    }
+
+    return v;
+  });
+
+  return venta;
+}
+
+export async function listVentas(filters?: {
+  idProducto?: number;
+  idSucursal?: number;
+  idEmpleado?: number;
+  limit?: number;
+}) {
+  return prisma.venta.findMany({
+    where: {
+      ...(filters?.idProducto && { idProducto: filters.idProducto }),
+      ...(filters?.idSucursal && { idSucursal: filters.idSucursal }),
+      ...(filters?.idEmpleado && { idEmpleado: filters.idEmpleado }),
+    },
+    include: {
+      producto: { include: { tipoProducto: true } },
+      sucursal: true,
+      canal: true,
+    },
+    orderBy: { fecha: "desc" },
+    take: filters?.limit ?? 50,
+  });
+}
+
+// ─── Stock ────────────────────────────────────────────────────
+
+export async function getStockLevels(idSucursal?: number) {
+  return prisma.stockLevel.findMany({
+    where: { ...(idSucursal && { idSucursal }) },
+    include: {
+      producto: { include: { tipoProducto: true } },
+      sucursal: true,
+    },
+    orderBy: { cantidad: "asc" },
+  });
+}
   });
 }
 

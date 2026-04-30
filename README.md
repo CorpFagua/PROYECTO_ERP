@@ -39,6 +39,62 @@ Módulo experimental que emula conceptos del sistema inmunológico biológico pa
 - **Registro de anomalías**: cada detección se persiste con severidad (LOW → CRITICAL)
 - **Arquitectura extensible**: nuevos detectores implementan la interfaz `AnomalyDetector`
 
+## Enfoque Inmunológico del Inventario
+
+Este proyecto adopta un modelo inspirado en inmunología para la seguridad y resiliencia del módulo de inventarios. El objetivo es combinar controles técnicos y aprendizaje operativo del equipo.
+
+### 1) Self (defensas internas del sistema)
+Representa lo que el propio sistema protege desde dentro.
+
+- Validación de entradas en backend con Zod (evita payloads malformados).
+- Acceso autenticado con JWT para rutas de inventario y sistema inmune.
+- Control de autorización por roles para operaciones sensibles (por ejemplo, escaneo completo).
+- Uso de Prisma ORM para reducir riesgo de inyección SQL por consultas manuales.
+- Manejo centralizado de errores sin exposición de detalles internos.
+
+### 2) Non-Self (defensas externas y perímetro)
+Representa medidas de protección de entorno y configuración.
+
+- Gestión segura de variables de entorno (`DATABASE_URL`, `JWT_SECRET`, etc.).
+- Configuración de seguridad HTTP con Helmet y CORS controlado por entorno.
+- Separación de ambientes (desarrollo, pruebas, producción).
+- Políticas de acceso a base de datos por mínimo privilegio.
+- Endurecimiento de infraestructura (firewall, red privada, backups, monitoreo).
+
+### 3) Anticuerpo (respuesta preventiva y correctiva)
+Representa mecanismos que neutralizan riesgos actuales y reducen ataques futuros.
+
+- Detectores de anomalías para stock fuera de umbrales y movimientos atípicos.
+- Registro histórico de anomalías con severidad para priorización operativa.
+- Flujo de atención de anomalías (`acknowledge`) para cerrar eventos y dejar trazabilidad.
+- Posibilidad de extender detectores para nuevos patrones de fraude, abuso o error humano.
+
+### 4) Memoria (aprendizaje organizacional)
+Representa la capacidad del equipo para aprender de eventos pasados y adaptarse.
+
+- Catálogo de incidentes con causa raíz y acción aplicada.
+- Ajuste periódico de reglas de detección según comportamiento real del inventario.
+- Capacitación al personal de bodega/operaciones sobre señales de riesgo.
+- Retroalimentación continua entre operaciones y desarrollo para mejorar detectores.
+
+### Traducción práctica al módulo de inventarios
+
+En términos operativos, el sistema se comporta así:
+
+1. Registra y protege cada movimiento de inventario con identidad y contexto.
+2. Detecta desviaciones frente al patrón esperado (stock y movimientos).
+3. Clasifica severidad para priorizar respuesta.
+4. Conserva evidencia histórica para que el equipo aprenda y ajuste reglas.
+5. Evoluciona detectores y controles según nuevos vectores de ataque o fraude.
+
+## Principios de Seguridad para Evolución del Proyecto
+
+- Todo endpoint nuevo debe definir autenticación y autorización explícitas.
+- Toda entrada externa debe validarse antes de llegar a lógica de negocio.
+- Toda alerta relevante debe generar trazabilidad auditable.
+- Toda mejora de detector debe apoyarse en incidentes o datos observables.
+- Toda decisión de seguridad debe documentar riesgo mitigado y costo operativo.
+
 ## Inicio rápido
 
 ### Requisitos previos
@@ -53,31 +109,82 @@ git clone <repo-url>
 cd PROYECTO_ERP
 ```
 
-### 2. Backend
+### 2. Crear la base de datos en PostgreSQL
+
+Desde la terminal, ejecuta estos comandos uno a uno:
+
+```bash
+psql -U postgres -c "CREATE DATABASE erp_db;"
+psql -U postgres -c "CREATE USER erp_user WITH PASSWORD 'erp_password';"
+psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE erp_db TO erp_user;"
+```
+
+> Si usas otra herramienta (pgAdmin, TablePlus, etc.) ejecuta las mismas sentencias SQL.
+
+### 3. Backend
 
 ```bash
 cd backend-erp
-cp .env.example .env          # Editar con datos de tu PostgreSQL
+cp .env.example .env          # Editar DATABASE_URL y JWT_SECRET
 npm install
-npx prisma migrate dev        # Crea las tablas en la base de datos
-npx prisma generate           # Genera el cliente Prisma
-npm run dev                   # Inicia en http://localhost:3001
 ```
 
-### 3. Frontend
+El archivo `.env` debe contener al menos:
+
+```env
+DATABASE_URL="postgresql://erp_user:erp_password@localhost:5432/erp_db"
+JWT_SECRET="cambia_esto_por_un_secreto_seguro"
+PORT=3001
+```
+
+Luego ejecutar la migración, generar el cliente y poblar los datos semilla:
+
+```bash
+# Crea todas las tablas y aplica el esquema
+npx prisma migrate dev --name rbac-dinamico-inventario
+
+# Pobla la base con datos reales del dump (empleados, productos, ventas, roles)
+npx prisma db seed
+
+# Inicia el servidor
+npm run dev                   # http://localhost:3001
+```
+
+Para regenerar el cliente Prisma sin correr migraciones (ej. tras un pull):
+
+```bash
+npx prisma generate
+```
+
+Para inspeccionar la base de datos en el navegador:
+
+```bash
+npx prisma studio             # http://localhost:5555
+```
+
+### 4. Frontend
 
 ```bash
 cd frontend-erp
 npm install
-npm run dev                   # Inicia en http://localhost:5173
+npm run dev                   # http://localhost:5173
 ```
 
-### 4. Verificar
+### 5. Verificar
 
-1. Abre `http://localhost:5173`
-2. Regístrate con email y contraseña
-3. Navega a Inventario y crea un producto
-4. Navega a Sistema Inmune y ejecuta un escaneo
+```bash
+# Login como administrador del sistema
+curl -X POST http://localhost:3001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@erp.com","password":"admin2024"}'
+
+# Login como empleado (contraseña por defecto: erp2024)
+curl -X POST http://localhost:3001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"santana.1001056@erp.com","password":"erp2024"}'
+```
+
+La respuesta incluye el JWT con el array `permisos[]` listo para usar en el frontend.
 
 ## Endpoints principales
 
@@ -89,16 +196,19 @@ npm run dev                   # Inicia en http://localhost:5173
 | GET | `/api/auth/me` | Perfil del usuario autenticado |
 
 ### Inventario
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| GET | `/api/inventory/products` | Listar productos |
-| POST | `/api/inventory/products` | Crear producto |
-| PATCH | `/api/inventory/products/:id` | Actualizar producto |
-| GET | `/api/inventory/warehouses` | Listar bodegas |
-| POST | `/api/inventory/warehouses` | Crear bodega |
-| POST | `/api/inventory/movements` | Registrar movimiento |
-| GET | `/api/inventory/movements` | Listar movimientos |
-| GET | `/api/inventory/stock` | Consultar niveles de stock |
+| Método | Ruta | Descripción | Permiso requerido |
+|--------|------|-------------|-------------------|
+| GET | `/api/inventory/products` | Listar productos | `inventario:ver` |
+| GET | `/api/inventory/products/:id` | Detalle de producto con stock | `inventario:ver` |
+| GET | `/api/inventory/product-types` | Listar tipos de producto | `inventario:ver` |
+| GET | `/api/inventory/sucursales` | Listar sucursales | `inventario:ver` |
+| GET | `/api/inventory/sucursales/:id` | Detalle de sucursal | `inventario:ver` |
+| GET | `/api/inventory/proveedores` | Listar proveedores | `compras:ver` |
+| POST | `/api/inventory/compras` | Registrar compra | `compras:crear` |
+| GET | `/api/inventory/compras` | Listar compras | `compras:ver` |
+| POST | `/api/inventory/ventas` | Registrar venta (descuenta stock) | `ventas:crear` |
+| GET | `/api/inventory/ventas` | Listar ventas | `ventas:ver` |
+| GET | `/api/inventory/stock` | Niveles de stock por sucursal | `inventario:ver` |
 
 ### Sistema Inmunológico
 | Método | Ruta | Descripción |

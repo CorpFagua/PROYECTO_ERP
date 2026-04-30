@@ -7,106 +7,276 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─── Usuarios ────────────────────────────────────────────────
+// ─── RBAC Dinámico ───────────────────────────────────────────
 
-enum Role {
-  ADMIN
-  MANAGER
-  OPERATOR
-  VIEWER
+model Rol {
+  id          Int          @id @default(autoincrement())
+  nombre      String       @unique
+  descripcion String?
+  activo      Boolean      @default(true)
+  creadoEn    DateTime     @default(now()) @map("creado_en")
+
+  permisos    RolPermiso[]
+  usuarios    User[]
+
+  @@map("roles")
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  password  String
-  name      String
-  role      Role     @default(OPERATOR)
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+model Permiso {
+  id          Int          @id @default(autoincrement())
+  codigo      String       @unique  // "inventario:crear", "ventas:anular"
+  modulo      String                // "inventario", "ventas", "reportes"
+  accion      String                // "ver", "crear", "editar", "eliminar"
+  descripcion String?
 
-  movements InventoryMovement[]
+  roles       RolPermiso[]
+
+  @@index([modulo])
+  @@map("permisos")
+}
+
+model RolPermiso {
+  rolId     Int @map("rol_id")
+  permisoId Int @map("permiso_id")
+
+  rol     Rol     @relation(fields: [rolId], references: [id])
+  permiso Permiso @relation(fields: [permisoId], references: [id])
+
+  @@id([rolId, permisoId])
+  @@map("rol_permisos")
+}
+
+// ─── Usuarios ────────────────────────────────────────────────
+
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  password    String
+  name        String
+  rolId       Int       @map("rol_id")
+  empleadoId  Int?      @unique @map("empleado_id")
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  rol         Rol       @relation(fields: [rolId], references: [id])
+  empleado    Empleado? @relation(fields: [empleadoId], references: [id])
 
   @@map("users")
 }
 
+// ─── Geografía ───────────────────────────────────────────────
+
+model Provincia {
+  id        Int         @id
+  nombre    String
+
+  localidades Localidad[]
+
+  @@map("provincia")
+}
+
+model Localidad {
+  id          Int       @id @default(autoincrement())
+  nombre      String
+  idProvincia Int       @map("id_provincia")
+  latitud     Float     @default(0)
+  longitud    Float     @default(0)
+
+  provincia   Provincia @relation(fields: [idProvincia], references: [id])
+  sucursales  Sucursal[]
+  proveedores Proveedor[]
+  clientes    Cliente[]
+
+  @@index([idProvincia])
+  @@map("localidad")
+}
+
+// ─── RRHH ────────────────────────────────────────────────────
+
+model Cargo {
+  id     Int    @id @default(autoincrement())
+  nombre String
+
+  empleados Empleado[]
+
+  @@map("cargo")
+}
+
+model Sector {
+  id     Int    @id @default(autoincrement())
+  nombre String
+
+  empleados Empleado[]
+
+  @@map("sector")
+}
+
+model Empleado {
+  id              Int       @id  // IDEmpleado del dump: {sucursal}{codigo}
+  codigoEmpleado  Int       @map("codigo_empleado")
+  apellido        String?
+  nombre          String?
+  idSucursal      Int       @map("id_sucursal")
+  idSector        Int       @map("id_sector")
+  idCargo         Int       @map("id_cargo")
+  salario         Decimal   @db.Decimal(10, 2)
+
+  sucursal  Sucursal  @relation(fields: [idSucursal], references: [id])
+  sector    Sector    @relation(fields: [idSector], references: [id])
+  cargo     Cargo     @relation(fields: [idCargo], references: [id])
+  user      User?
+  ventas    Venta[]
+
+  @@index([idSucursal])
+  @@index([idCargo])
+  @@map("empleado")
+}
+
 // ─── Inventario ──────────────────────────────────────────────
 
-model Product {
-  id          String   @id @default(cuid())
-  sku         String   @unique
-  name        String
-  description String?
-  category    String
-  unit        String   @default("unidad")
-  minStock    Int      @default(0) @map("min_stock")
-  maxStock    Int?     @map("max_stock")
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+model TipoProducto {
+  id     Int    @id @default(autoincrement())
+  nombre String @map("tipo_producto")
 
-  movements  InventoryMovement[]
+  productos Producto[]
+
+  @@map("tipo_producto")
+}
+
+model Producto {
+  id              Int          @id   // IdProducto del dump
+  nombre          String       @map("producto")
+  precio          Decimal      @db.Decimal(15, 3)
+  idTipoProducto  Int          @map("id_tipo_producto")
+  activo          Boolean      @default(true)
+
+  tipoProducto  TipoProducto  @relation(fields: [idTipoProducto], references: [id])
+  compras       Compra[]
+  ventas        Venta[]
+  stockLevels   StockLevel[]
+
+  @@index([idTipoProducto])
+  @@map("producto")
+}
+
+model Sucursal {
+  id          Int      @id  // IdSucursal del dump
+  nombre      String   @map("sucursal")
+  domicilio   String?
+  idLocalidad Int      @map("id_localidad")
+  latitud     Decimal  @default(0) @db.Decimal(13, 10)
+  longitud    Decimal  @default(0) @db.Decimal(13, 10)
+  activa      Boolean  @default(true)
+
+  localidad   Localidad @relation(fields: [idLocalidad], references: [id])
+  empleados   Empleado[]
+  ventas      Venta[]
   stockLevels StockLevel[]
 
-  @@map("products")
+  @@index([idLocalidad])
+  @@map("sucursal")
 }
 
-model Warehouse {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  location  String?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+model Proveedor {
+  id          Int     @id  // IdProveedor del dump
+  nombre      String?
+  domicilio   String?
+  idLocalidad Int     @map("id_localidad")
 
-  movements  InventoryMovement[]
-  stockLevels StockLevel[]
+  localidad Localidad @relation(fields: [idLocalidad], references: [id])
+  compras   Compra[]
 
-  @@map("warehouses")
+  @@index([idLocalidad])
+  @@map("proveedor")
 }
 
-enum MovementType {
-  IN
-  OUT
-  ADJUSTMENT
+model CanalVenta {
+  id     Int    @id  // IdCanal del dump
+  canal  String?
+
+  ventas Venta[]
+
+  @@map("canal_venta")
 }
 
-model InventoryMovement {
-  id          String       @id @default(cuid())
-  productId   String       @map("product_id")
-  warehouseId String       @map("warehouse_id")
-  type        MovementType
-  quantity    Int
-  reason      String?
-  userId      String       @map("user_id")
-  createdAt   DateTime     @default(now()) @map("created_at")
+model Compra {
+  id          Int      @id  // IdCompra del dump
+  fecha       DateTime @db.Date
+  idProducto  Int      @map("id_producto")
+  cantidad    Int
+  precio      Decimal  @db.Decimal(10, 2)
+  idProveedor Int      @map("id_proveedor")
 
-  product   Product   @relation(fields: [productId], references: [id])
-  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
-  user      User      @relation(fields: [userId], references: [id])
+  producto  Producto  @relation(fields: [idProducto], references: [id])
+  proveedor Proveedor @relation(fields: [idProveedor], references: [id])
 
-  @@index([productId])
-  @@index([warehouseId])
-  @@index([createdAt])
-  @@map("inventory_movements")
+  @@index([idProducto])
+  @@index([idProveedor])
+  @@index([fecha])
+  @@map("compra")
 }
+
+model Cliente {
+  id              Int      @id
+  nombreApellido  String?  @map("nombre_y_apellido")
+  domicilio       String?
+  telefono        String?
+  edad            String?
+  rangoEtario     String   @default("-") @map("rango_etario")
+  idLocalidad     Int      @default(0) @map("id_localidad")
+  latitud         Decimal  @default(0) @db.Decimal(13, 10)
+  longitud        Decimal  @default(0) @db.Decimal(13, 10)
+
+  localidad Localidad @relation(fields: [idLocalidad], references: [id])
+  ventas    Venta[]
+
+  @@index([idLocalidad])
+  @@map("cliente")
+}
+
+model Venta {
+  id            Int      @id
+  fecha         DateTime @db.Date
+  fechaEntrega  DateTime @db.Date @map("fecha_entrega")
+  idCanal       Int?     @map("id_canal")
+  idCliente     Int?     @map("id_cliente")
+  idSucursal    Int?     @map("id_sucursal")
+  idEmpleado    Int?     @map("id_empleado")
+  idProducto    Int?     @map("id_producto")
+  precio        Decimal  @db.Decimal(15, 3)
+  cantidad      Int      @default(0)
+
+  canal     CanalVenta? @relation(fields: [idCanal], references: [id])
+  cliente   Cliente?    @relation(fields: [idCliente], references: [id])
+  sucursal  Sucursal?   @relation(fields: [idSucursal], references: [id])
+  empleado  Empleado?   @relation(fields: [idEmpleado], references: [id])
+  producto  Producto?   @relation(fields: [idProducto], references: [id])
+
+  @@index([idProducto])
+  @@index([idSucursal])
+  @@index([idEmpleado])
+  @@index([fecha])
+  @@map("venta")
+}
+
+// ─── Stock (caché denormalizado) ─────────────────────────────
 
 model StockLevel {
-  id          String   @id @default(cuid())
-  productId   String   @map("product_id")
-  warehouseId String   @map("warehouse_id")
-  quantity    Int      @default(0)
+  id          Int      @id @default(autoincrement())
+  idProducto  Int      @map("id_producto")
+  idSucursal  Int      @map("id_sucursal")
+  cantidad    Int      @default(0)
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  product   Product   @relation(fields: [productId], references: [id])
-  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  producto  Producto  @relation(fields: [idProducto], references: [id])
+  sucursal  Sucursal  @relation(fields: [idSucursal], references: [id])
 
-  @@unique([productId, warehouseId])
+  @@unique([idProducto, idSucursal])
   @@map("stock_levels")
 }
 
-// ─── Sistema Inmunológico — Registro de Anomalías ────────────
+// ─── Sistema Inmunológico ─────────────────────────────────────
 
 enum Severity {
   LOW
