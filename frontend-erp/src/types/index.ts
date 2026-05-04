@@ -1,10 +1,19 @@
 // ─── Auth ────────────────────────────────────────────────────
 
+export interface Empleado {
+  id: number;
+  nombre: string | null;
+  apellido: string | null;
+}
+
 export interface User {
   id: string;
   email: string;
   name: string;
-  role: "ADMIN" | "MANAGER" | "OPERATOR" | "VIEWER";
+  /** Nombre del rol dinámico: SUPER_ADMIN, GERENTE, VENDEDOR, etc. */
+  rol: string;
+  permisos: string[];
+  empleado?: Empleado | null;
   createdAt?: string;
 }
 
@@ -24,52 +33,84 @@ export interface RegisterInput {
   name: string;
 }
 
+// ─── Geografía ───────────────────────────────────────────────
+
+export interface Localidad {
+  id: number;
+  nombre: string;
+  idProvincia: number;
+}
+
 // ─── Inventario ──────────────────────────────────────────────
 
+export interface TipoProducto {
+  id: number;
+  nombre: string;
+}
+
 export interface Product {
-  id: string;
-  sku: string;
-  name: string;
-  description?: string;
-  category: string;
-  unit: string;
-  minStock: number;
-  maxStock?: number;
-  active: boolean;
-  createdAt: string;
-  updatedAt: string;
+  id: number;
+  nombre: string;
+  precio: number;
+  idTipoProducto: number;
+  activo: boolean;
+  tipoProducto: TipoProducto;
 }
 
-export interface Warehouse {
-  id: string;
-  name: string;
-  location?: string;
-  active: boolean;
+export interface Sucursal {
+  id: number;
+  nombre: string;
+  domicilio: string | null;
+  idLocalidad: number;
+  latitud: number;
+  longitud: number;
+  activa: boolean;
+  localidad: Localidad;
 }
 
-export type MovementType = "IN" | "OUT" | "ADJUSTMENT";
-
-export interface InventoryMovement {
-  id: string;
-  productId: string;
-  warehouseId: string;
-  type: MovementType;
-  quantity: number;
-  reason?: string;
-  userId: string;
-  createdAt: string;
-  product?: Product;
-  warehouse?: Warehouse;
-  user?: { name: string; email: string };
+export interface Proveedor {
+  id: number;
+  nombre: string | null;
+  domicilio: string | null;
+  idLocalidad: number;
+  localidad: Localidad;
 }
 
 export interface StockLevel {
-  id: string;
-  productId: string;
-  warehouseId: string;
-  quantity: number;
-  product?: Product;
-  warehouse?: Warehouse;
+  id: number;
+  idProducto: number;
+  idSucursal: number;
+  cantidad: number;
+  updatedAt: string;
+  producto: Product;
+  sucursal: Sucursal;
+}
+
+export interface Compra {
+  id: number;
+  fecha: string;
+  idProducto: number;
+  cantidad: number;
+  precio: number;
+  idProveedor: number;
+  producto: Product;
+  proveedor: Proveedor;
+}
+
+export interface Venta {
+  id: number;
+  fecha: string;
+  fechaEntrega: string;
+  idCanal: number | null;
+  idCliente: number | null;
+  idSucursal: number | null;
+  idEmpleado: number | null;
+  idProducto: number | null;
+  precio: number;
+  cantidad: number;
+  producto: Product | null;
+  sucursal: Sucursal | null;
+  canal: { id: number; canal: string | null } | null;
 }
 
 // ─── Sistema Inmunológico ────────────────────────────────────

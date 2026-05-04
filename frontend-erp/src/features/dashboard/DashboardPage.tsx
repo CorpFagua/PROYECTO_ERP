@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Package, Warehouse, TrendingUp, ShieldAlert } from "lucide-react";
+import { Package, Store, TrendingUp, ShieldAlert } from "lucide-react";
 import { api } from "../../api/client";
 import type { Product, StockLevel, ImmuneStatus } from "../../types";
 
@@ -36,14 +36,14 @@ export function DashboardPage() {
           },
           {
             label: "Items en stock",
-            value: stock.reduce((sum, s) => sum + s.quantity, 0),
+            value: stock.reduce((sum, s) => sum + s.cantidad, 0).toLocaleString("es-CL"),
             icon: TrendingUp,
             color: "bg-green-50 text-green-600",
           },
           {
-            label: "Bodegas activas",
-            value: new Set(stock.map((s) => s.warehouseId)).size,
-            icon: Warehouse,
+            label: "Sucursales con stock",
+            value: new Set(stock.map((s) => s.idSucursal)).size,
+            icon: Store,
             color: "bg-purple-50 text-purple-600",
           },
           {

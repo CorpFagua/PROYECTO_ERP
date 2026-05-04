@@ -30,6 +30,39 @@ export async function listTiposProducto() {
   return prisma.tipoProducto.findMany({ orderBy: { nombre: "asc" } });
 }
 
+export async function createProducto(input: {
+  nombre: string;
+  precio: number;
+  idTipoProducto: number;
+}) {
+  const tipo = await prisma.tipoProducto.findUnique({ where: { id: input.idTipoProducto } });
+  if (!tipo) throw new AppError(400, "Tipo de producto no válido");
+  return prisma.producto.create({
+    data: { ...input, activo: true },
+    include: { tipoProducto: true },
+  });
+}
+
+export async function updateProducto(
+  id: number,
+  input: { nombre?: string; precio?: number; idTipoProducto?: number; activo?: boolean },
+) {
+  const existing = await prisma.producto.findUnique({ where: { id } });
+  if (!existing) throw new AppError(404, "Producto no encontrado");
+  return prisma.producto.update({
+    where: { id },
+    data: input,
+    include: { tipoProducto: true },
+  });
+}
+
+/** Baja lógica: marca activo = false */
+export async function deleteProducto(id: number) {
+  const existing = await prisma.producto.findUnique({ where: { id } });
+  if (!existing) throw new AppError(404, "Producto no encontrado");
+  return prisma.producto.update({ where: { id }, data: { activo: false } });
+}
+
 // ─── Sucursales ───────────────────────────────────────────────
 
 export async function listSucursales() {
@@ -49,11 +82,67 @@ export async function getSucursal(id: number) {
   return sucursal;
 }
 
+export async function createSucursal(input: {
+  nombre: string;
+  domicilio?: string;
+  idLocalidad: number;
+}) {
+  return prisma.sucursal.create({
+    data: { ...input, activa: true },
+    include: { localidad: true },
+  });
+}
+
+export async function updateSucursal(
+  id: number,
+  input: { nombre?: string; domicilio?: string; idLocalidad?: number; activa?: boolean },
+) {
+  const existing = await prisma.sucursal.findUnique({ where: { id } });
+  if (!existing) throw new AppError(404, "Sucursal no encontrada");
+  return prisma.sucursal.update({
+    where: { id },
+    data: input,
+    include: { localidad: true },
+  });
+}
+
 // ─── Proveedores ──────────────────────────────────────────────
 
 export async function listProveedores() {
   return prisma.proveedor.findMany({
     include: { localidad: true },
+    orderBy: { nombre: "asc" },
+  });
+}
+
+export async function createProveedor(input: {
+  nombre?: string;
+  domicilio?: string;
+  idLocalidad: number;
+}) {
+  return prisma.proveedor.create({
+    data: input,
+    include: { localidad: true },
+  });
+}
+
+export async function updateProveedor(
+  id: number,
+  input: { nombre?: string; domicilio?: string; idLocalidad?: number },
+) {
+  const existing = await prisma.proveedor.findUnique({ where: { id } });
+  if (!existing) throw new AppError(404, "Proveedor no encontrado");
+  return prisma.proveedor.update({
+    where: { id },
+    data: input,
+    include: { localidad: true },
+  });
+}
+
+// ─── Localidades ──────────────────────────────────────────────
+
+export async function listLocalidades() {
+  return prisma.localidad.findMany({
     orderBy: { nombre: "asc" },
   });
 }
@@ -211,17 +300,5 @@ export async function getStockLevels(idSucursal?: number) {
       sucursal: true,
     },
     orderBy: { cantidad: "asc" },
-  });
-}
-  });
-}
-
-// ─── Stock ───────────────────────────────────────────────────
-
-export async function getStockLevels(warehouseId?: string) {
-  return prisma.stockLevel.findMany({
-    where: warehouseId ? { warehouseId } : undefined,
-    include: { product: true, warehouse: true },
-    orderBy: { product: { name: "asc" } },
   });
 }

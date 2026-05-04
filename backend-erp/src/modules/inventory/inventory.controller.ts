@@ -4,6 +4,44 @@ import * as inventoryService from "./inventory.service.js";
 
 // ─── Schemas ─────────────────────────────────────────────────
 
+const productoCreateSchema = z.object({
+  nombre: z.string().min(1, "El nombre es requerido"),
+  precio: z.number().positive("El precio debe ser positivo"),
+  idTipoProducto: z.number().int().positive(),
+});
+
+const productoUpdateSchema = z.object({
+  nombre: z.string().min(1).optional(),
+  precio: z.number().positive().optional(),
+  idTipoProducto: z.number().int().positive().optional(),
+  activo: z.boolean().optional(),
+});
+
+const sucursalCreateSchema = z.object({
+  nombre: z.string().min(1, "El nombre es requerido"),
+  domicilio: z.string().optional(),
+  idLocalidad: z.number().int().positive(),
+});
+
+const sucursalUpdateSchema = z.object({
+  nombre: z.string().min(1).optional(),
+  domicilio: z.string().optional(),
+  idLocalidad: z.number().int().positive().optional(),
+  activa: z.boolean().optional(),
+});
+
+const proveedorCreateSchema = z.object({
+  nombre: z.string().min(1, "El nombre es requerido").optional(),
+  domicilio: z.string().optional(),
+  idLocalidad: z.number().int().positive(),
+});
+
+const proveedorUpdateSchema = z.object({
+  nombre: z.string().min(1).optional(),
+  domicilio: z.string().optional(),
+  idLocalidad: z.number().int().positive().optional(),
+});
+
 const compraSchema = z.object({
   fecha: z.string().datetime({ offset: true }).or(z.string().date()),
   idProducto: z.number().int().positive(),
@@ -152,6 +190,92 @@ export async function getStockLevels(req: Request, res: Response, next: NextFunc
       req.query.idSucursal ? Number(req.query.idSucursal) : undefined,
     );
     res.json(levels);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── CRUD Productos ──────────────────────────────────────────
+
+export async function createProducto(req: Request, res: Response, next: NextFunction) {
+  try {
+    const data = productoCreateSchema.parse(req.body);
+    const producto = await inventoryService.createProducto(data);
+    res.status(201).json(producto);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateProducto(req: Request, res: Response, next: NextFunction) {
+  try {
+    const data = productoUpdateSchema.parse(req.body);
+    const producto = await inventoryService.updateProducto(Number(req.params.id), data);
+    res.json(producto);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deleteProducto(req: Request, res: Response, next: NextFunction) {
+  try {
+    await inventoryService.deleteProducto(Number(req.params.id));
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── CRUD Sucursales ─────────────────────────────────────────
+
+export async function createSucursal(req: Request, res: Response, next: NextFunction) {
+  try {
+    const data = sucursalCreateSchema.parse(req.body);
+    const sucursal = await inventoryService.createSucursal(data);
+    res.status(201).json(sucursal);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateSucursal(req: Request, res: Response, next: NextFunction) {
+  try {
+    const data = sucursalUpdateSchema.parse(req.body);
+    const sucursal = await inventoryService.updateSucursal(Number(req.params.id), data);
+    res.json(sucursal);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── CRUD Proveedores ────────────────────────────────────────
+
+export async function createProveedor(req: Request, res: Response, next: NextFunction) {
+  try {
+    const data = proveedorCreateSchema.parse(req.body);
+    const proveedor = await inventoryService.createProveedor(data);
+    res.status(201).json(proveedor);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateProveedor(req: Request, res: Response, next: NextFunction) {
+  try {
+    const data = proveedorUpdateSchema.parse(req.body);
+    const proveedor = await inventoryService.updateProveedor(Number(req.params.id), data);
+    res.json(proveedor);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── Localidades ─────────────────────────────────────────────
+
+export async function listLocalidades(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const localidades = await inventoryService.listLocalidades();
+    res.json(localidades);
   } catch (err) {
     next(err);
   }

@@ -2,6 +2,11 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   Package,
+  Store,
+  BarChart2,
+  ShoppingCart,
+  TrendingUp,
+  Truck,
   ShieldAlert,
   LogOut,
 } from "lucide-react";
@@ -9,7 +14,12 @@ import { useAuthStore } from "../../stores/authStore";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/inventory", label: "Inventario", icon: Package },
+  { to: "/inventory", label: "Productos", icon: Package },
+  { to: "/sucursales", label: "Sucursales", icon: Store },
+  { to: "/stock", label: "Stock", icon: BarChart2 },
+  { to: "/ventas", label: "Ventas", icon: TrendingUp },
+  { to: "/compras", label: "Compras", icon: ShoppingCart },
+  { to: "/proveedores", label: "Proveedores", icon: Truck },
   { to: "/immune", label: "Sistema Inmune", icon: ShieldAlert },
 ];
 

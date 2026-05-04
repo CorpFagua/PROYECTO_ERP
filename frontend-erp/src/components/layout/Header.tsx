@@ -12,7 +12,7 @@ export function Header() {
       <div className="flex items-center gap-3">
         <div className="text-right">
           <p className="text-sm font-medium text-slate-700">{user?.name}</p>
-          <p className="text-xs text-slate-400">{user?.role}</p>
+          <p className="text-xs text-slate-400">{user?.rol}</p>
         </div>
         <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-sm font-semibold">
           {user?.name?.charAt(0).toUpperCase() ?? "U"}

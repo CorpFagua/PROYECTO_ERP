@@ -219,6 +219,21 @@ curl -X POST http://localhost:3001/api/auth/login \
 
 La respuesta incluye el JWT con el array `permisos[]` listo para usar en el frontend.
 
+## Páginas del frontend
+
+| Ruta | Componente | Descripción | Permiso |
+|------|-----------|-------------|---------|
+| `/dashboard` | `DashboardPage` | Estadísticas generales: productos, stock total, sucursales con stock, anomalías pendientes | `inventario:ver` |
+| `/inventory` | `InventoryPage` | Catálogo de productos con **crear / editar / dar de baja** | `inventario:ver` |
+| `/sucursales` | `SucursalesPage` | Listado de sucursales activas con **crear / editar** | `inventario:ver` |
+| `/stock` | `StockPage` | Niveles de stock por producto y sucursal; resalta crítico en rojo | `inventario:ver` |
+| `/ventas` | `VentasPage` | Historial de ventas con **registrar nueva venta** (descuenta stock) | `ventas:ver` |
+| `/compras` | `ComprasPage` | Historial de compras con **registrar nueva compra** (ingresa stock) | `compras:ver` |
+| `/proveedores` | `ProveedoresPage` | Listado de proveedores con **crear / editar** | `compras:ver` |
+| `/immune` | `ImmunePage` | Log de anomalías detectadas y escaneo manual | `anomalias:ver` |
+
+> Los tipos TypeScript del frontend (`src/types/index.ts`) están sincronizados con los campos reales que devuelven los endpoints: nombres en español (`nombre`, `cantidad`, `idSucursal`, `rol`, `permisos[]`).
+
 ## Endpoints principales
 
 ### Auth
@@ -254,3 +269,82 @@ La respuesta incluye el JWT con el array `permisos[]` listo para usar en el fron
 ## Licencia
 
 Proyecto privado — uso interno.
+
+---
+
+## Usuarios del sistema
+
+### Usuario administrador (creado manualmente)
+
+| Email | Contraseña | Rol |
+|-------|-----------|-----|
+| `admin@erp.com` | `admin2024` | SUPER_ADMIN |
+
+### Usuarios de empleados (generados desde el dump)
+
+Cada empleado del dump tiene un usuario con la siguiente convención:
+
+| Campo | Valor |
+|-------|-------|
+| **Email** | `{apellido}.{idEmpleado}@erp.com` (sin tildes ni caracteres especiales) |
+| **Contraseña** | `erp2024` |
+| **Rol** | Asignado según cargo y salario (ver tabla abajo) |
+
+**Ejemplo:**
+```bash
+# Empleado con apellido "Santana", ID 1001056
+email: santana.1001056@erp.com
+password: erp2024
+```
+
+### Asignación de roles según cargo
+
+| Cargo (idCargo) | Condición | Rol asignado |
+|-----------------|-----------|-------------|
+| Administrativo (1) | Salario ≥ 40.000 | GERENTE |
+| Administrativo (1) | Salario < 40.000 | ADMINISTRADOR |
+| Aux. Administrativo (2) | — | OPERADOR |
+| Aux. Técnico (3) / Técnico (4) | — | TECNICO |
+| Vendedor (5) | — | VENDEDOR |
+| Cualquier otro | — | OPERADOR |
+
+---
+
+## Roles y permisos
+
+| Rol | Descripción | Permisos |
+|-----|-------------|----------|
+| **SUPER_ADMIN** | Acceso total al sistema | Todos |
+| **ADMINISTRADOR** | Administrador de operaciones | Todos excepto `sistema:configurar` |
+| **GERENTE** | Gerente de sucursal | Ver inventario/compras/ventas/reportes, aprobar compras, anular ventas, ver anomalías |
+| **TECNICO** | Técnico de inventario | Ver/crear/editar inventario, ver compras/proveedores, ver anomalías |
+| **VENDEDOR** | Vendedor en sucursal | Ver inventario, ver/crear ventas, ver sucursales |
+| **OPERADOR** | Operador administrativo | Ver inventario/compras/ventas/proveedores/sucursales/reportes |
+| **AUDITOR** | Solo lectura | Ver todos los módulos sin poder crear ni modificar |
+
+### Catálogo de permisos disponibles
+
+| Código | Módulo | Acción |
+|--------|--------|--------|
+| `inventario:ver` | Inventario | Ver productos, stock, sucursales |
+| `inventario:crear` | Inventario | Crear productos y movimientos |
+| `inventario:editar` | Inventario | Editar productos |
+| `inventario:eliminar` | Inventario | Eliminar productos |
+| `compras:ver` | Compras | Listar compras y proveedores |
+| `compras:crear` | Compras | Registrar nuevas compras |
+| `compras:aprobar` | Compras | Aprobar órdenes de compra |
+| `ventas:ver` | Ventas | Listar ventas |
+| `ventas:crear` | Ventas | Registrar ventas (descuenta stock) |
+| `ventas:anular` | Ventas | Anular ventas |
+| `proveedores:ver` | Proveedores | Listar proveedores |
+| `proveedores:gestionar` | Proveedores | Crear/editar proveedores |
+| `sucursales:ver` | Sucursales | Listar sucursales |
+| `sucursales:gestionar` | Sucursales | Crear/editar sucursales |
+| `usuarios:ver` | Usuarios | Listar usuarios |
+| `usuarios:gestionar` | Usuarios | Crear/editar usuarios y roles |
+| `reportes:ver` | Reportes | Ver reportes |
+| `reportes:exportar` | Reportes | Exportar reportes |
+| `anomalias:ver` | Anomalías | Ver log de anomalías |
+| `anomalias:gestionar` | Anomalías | Gestionar y atender anomalías |
+| `sistema:configurar` | Sistema | Configuración global (solo SUPER_ADMIN) |
+
