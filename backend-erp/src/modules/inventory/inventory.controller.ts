@@ -5,14 +5,14 @@ import * as inventoryService from "./inventory.service.js";
 // ─── Schemas ─────────────────────────────────────────────────
 
 const productoCreateSchema = z.object({
-  nombre: z.string().min(1, "El nombre es requerido"),
-  precio: z.number().positive("El precio debe ser positivo"),
+  nombre: z.string().min(1, "El nombre es requerido").max(255).trim(),
+  precio: z.number().positive("El precio debe ser positivo").max(999_999_999_999.999),
   idTipoProducto: z.number().int().positive(),
 });
 
 const productoUpdateSchema = z.object({
-  nombre: z.string().min(1).optional(),
-  precio: z.number().positive().optional(),
+  nombre: z.string().min(1).max(255).trim().optional(),
+  precio: z.number().positive().max(999_999_999_999.999).optional(),
   idTipoProducto: z.number().int().positive().optional(),
   activo: z.boolean().optional(),
 });

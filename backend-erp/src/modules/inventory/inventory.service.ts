@@ -1,5 +1,10 @@
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../middleware/errorHandler.js";
+import {
+  scanNuevoProducto,
+  scanNuevaCompra,
+  scanNuevaVenta,
+} from "../immune-system/immune.service.js";
 
 // ─── Productos ───────────────────────────────────────────────
 
@@ -37,10 +42,13 @@ export async function createProducto(input: {
 }) {
   const tipo = await prisma.tipoProducto.findUnique({ where: { id: input.idTipoProducto } });
   if (!tipo) throw new AppError(400, "Tipo de producto no válido");
-  return prisma.producto.create({
+  const producto = await prisma.producto.create({
     data: { ...input, activo: true },
     include: { tipoProducto: true },
   });
+  // AIS — Self: escaneo reactivo de precio tras la creación
+  scanNuevoProducto(producto.id).catch(() => undefined);
+  return producto;
 }
 
 export async function updateProducto(
@@ -166,10 +174,33 @@ export async function registrarCompra(input: CreateCompraInput) {
   if (!producto) throw new AppError(404, "Producto no encontrado");
   if (!proveedor) throw new AppError(404, "Proveedor no encontrado");
 
-  // Compra no está vinculada a una sucursal específica (es un ingreso al sistema)
-  // Se actualiza el stock del depósito (sucursal 9 = "Deposito" en el seed)
+  // AIS — Self: analizar la compra ANTES de persistir (IQR dinámico)
+  // Si es outlier extremo → PENDING_APPROVAL, sin ingresar stock todavía.
+  const aisResult = await scanNuevaCompra({
+    idProducto: input.idProducto,
+    cantidad: input.cantidad,
+    precio: input.precio,
+  });
+
   const DEPOSITO_ID = 9;
 
+  if (aisResult.requiresApproval) {
+    // Guardar la compra bloqueada SIN actualizar stock
+    const compra = await prisma.compra.create({
+      data: {
+        fecha: input.fecha,
+        idProducto: input.idProducto,
+        cantidad: input.cantidad,
+        precio: input.precio,
+        idProveedor: input.idProveedor,
+        status: "PENDING_APPROVAL",
+        anomalyLogId: aisResult.anomalyLogId,
+      },
+    });
+    return { ...compra, _aisBlocked: true };
+  }
+
+  // Flujo normal: crear compra y actualizar stock en una transacción
   const compra = await prisma.$transaction(async (tx) => {
     const c = await tx.compra.create({
       data: {
@@ -178,6 +209,7 @@ export async function registrarCompra(input: CreateCompraInput) {
         cantidad: input.cantidad,
         precio: input.precio,
         idProveedor: input.idProveedor,
+        status: "NORMAL",
       },
     });
 
@@ -264,6 +296,13 @@ export async function registrarVenta(input: CreateVentaInput) {
 
     return v;
   });
+
+  // AIS — Self: escaneo reactivo de stock tras el descuento
+  scanNuevaVenta({
+    idProducto: input.idProducto,
+    cantidad: input.cantidad,
+    idSucursal: input.idSucursal,
+  }).catch(() => undefined);
 
   return venta;
 }

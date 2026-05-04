@@ -121,6 +121,7 @@ function signToken(
   return jwt.sign(
     { userId, email, role, permisos, ...(empleadoId && { empleadoId }) },
     env.JWT_SECRET,
-    { expiresIn: env.JWT_EXPIRES_IN },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    { expiresIn: env.JWT_EXPIRES_IN as any },
   );
 }

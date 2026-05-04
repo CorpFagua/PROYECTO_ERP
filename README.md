@@ -32,68 +32,561 @@ PROYECTO_ERP/
 - Niveles de stock en tiempo real por bodega
 
 ### Sistema Inmunológico Artificial (AIS)
-Módulo experimental que emula conceptos del sistema inmunológico biológico para detectar anomalías en patrones de inventario:
+Módulo que emula conceptos del sistema inmunológico biológico para detectar y registrar anomalías en las operaciones de inventario. Opera en dos modos:
 
-- **Detectores de umbral (PRR)**: identifican stock fuera de rangos definidos (mín/máx)
-- **Detectores de movimientos inusuales (Células T)**: analizan desviaciones del comportamiento histórico
-- **Registro de anomalías**: cada detección se persiste con severidad (LOW → CRITICAL)
-- **Arquitectura extensible**: nuevos detectores implementan la interfaz `AnomalyDetector`
+- **Escaneo completo** (`POST /api/immune/scan`): recorre todo el stock y el historial de movimientos recientes. Solo roles con `anomalias:gestionar`.
+- **Escaneos reactivos**: se disparan automáticamente al crear un producto, registrar una compra o registrar una venta, sin bloquear la respuesta principal.
 
-## Enfoque Inmunológico del Inventario
+Detectores activos:
 
-Este proyecto adopta un modelo inspirado en inmunología para la seguridad y resiliencia del módulo de inventarios. El objetivo es combinar controles técnicos y aprendizaje operativo del equipo.
+| Tipo (`detectorType`) | Analogía biológica | Operación que lo activa | Severidades posibles |
+|----------------------|-------------------|------------------------|----------------------|
+| `STOCK_THRESHOLD` | PRR (receptor de patrón innato) | Escaneo completo + venta | HIGH, CRITICAL |
+| `UNUSUAL_MOVEMENT` | Células T de memoria | Escaneo completo | HIGH, MEDIUM |
+| `UNUSUAL_PURCHASE` | Respuesta adaptativa | Alta de compra | HIGH, CRITICAL |
+| `PURCHASE_PRICE_ANOMALY` | Señal de peligro económica | Alta de compra | MEDIUM |
+| `PRICE_ANOMALY` | Control de integridad de datos | Alta de producto | HIGH, CRITICAL |
 
-### 1) Self (defensas internas del sistema)
-Representa lo que el propio sistema protege desde dentro.
+## Cuándo se genera una anomalía y qué hace el sistema
 
-- Validación de entradas en backend con Zod (evita payloads malformados).
-- Acceso autenticado con JWT para rutas de inventario y sistema inmune.
-- Control de autorización por roles para operaciones sensibles (por ejemplo, escaneo completo).
-- Uso de Prisma ORM para reducir riesgo de inyección SQL por consultas manuales.
-- Manejo centralizado de errores sin exposición de detalles internos.
+Esta sección describe, de forma operativa, cada situación que genera una alerta, el momento exacto en que ocurre y qué queda registrado en `anomaly_logs`.
 
-### 2) Non-Self (defensas externas y perímetro)
-Representa medidas de protección de entorno y configuración.
+---
 
-- Gestión segura de variables de entorno (`DATABASE_URL`, `JWT_SECRET`, etc.).
-- Configuración de seguridad HTTP con Helmet y CORS controlado por entorno.
-- Separación de ambientes (desarrollo, pruebas, producción).
-- Políticas de acceso a base de datos por mínimo privilegio.
-- Endurecimiento de infraestructura (firewall, red privada, backups, monitoreo).
+### Al crear un producto — `POST /api/inventory/products`
 
-### 3) Anticuerpo (respuesta preventiva y correctiva)
-Representa mecanismos que neutralizan riesgos actuales y reducen ataques futuros.
+Inmediatamente después de guardar el nuevo producto en la base de datos, el AIS ejecuta `scanNuevoProducto` en segundo plano. Compara el precio del nuevo producto con el promedio de los demás productos del mismo tipo.
 
-- Detectores de anomalías para stock fuera de umbrales y movimientos atípicos.
-- Registro histórico de anomalías con severidad para priorización operativa.
-- Flujo de atención de anomalías (`acknowledge`) para cerrar eventos y dejar trazabilidad.
-- Posibilidad de extender detectores para nuevos patrones de fraude, abuso o error humano.
+**Caso 1 — Precio en cero**
+> Condición: el producto se creó con `precio = 0`
 
-### 4) Memoria (aprendizaje organizacional)
-Representa la capacidad del equipo para aprender de eventos pasados y adaptarse.
+```
+detectorType : PRICE_ANOMALY
+severity     : HIGH
+description  : Nuevo producto con precio cero: "NombreProducto" (tipo: TipoProducto)
+metadata     : { productoId, nombreProducto, tipoProducto, precio: 0 }
+```
 
-- Catálogo de incidentes con causa raíz y acción aplicada.
-- Ajuste periódico de reglas de detección según comportamiento real del inventario.
-- Capacitación al personal de bodega/operaciones sobre señales de riesgo.
-- Retroalimentación continua entre operaciones y desarrollo para mejorar detectores.
+Indica un producto cargado incompleto o un error de formulario. No debe estar activo en el catálogo con ese precio.
 
-### Traducción práctica al módulo de inventarios
+**Caso 2 — Precio desproporcionadamente alto**
+> Condición: `precio > 10 × promedio de productos del mismo tipo`
 
-En términos operativos, el sistema se comporta así:
+```
+detectorType : PRICE_ANOMALY
+severity     : HIGH    (si ratio entre 10x y 50x)
+             : CRITICAL (si ratio > 50x)
+description  : Precio anómalo en nuevo producto: "X" tiene $Y vs promedio del tipo "Z" de $W (Rx)
+metadata     : { productoId, nombreProducto, tipoProducto, precio, promedioPorTipo, ratio }
+```
 
-1. Registra y protege cada movimiento de inventario con identidad y contexto.
-2. Detecta desviaciones frente al patrón esperado (stock y movimientos).
-3. Clasifica severidad para priorizar respuesta.
-4. Conserva evidencia histórica para que el equipo aprenda y ajuste reglas.
-5. Evoluciona detectores y controles según nuevos vectores de ataque o fraude.
+Puede indicar un error de carga (ej. se ingresó precio en centavos en lugar de pesos) o un precio fraudulento.
 
-## Principios de Seguridad para Evolución del Proyecto
+> Si es el primer producto de un tipo, no hay promedio de referencia y no se genera anomalía.
 
-- Todo endpoint nuevo debe definir autenticación y autorización explícitas.
-- Toda entrada externa debe validarse antes de llegar a lógica de negocio.
-- Toda alerta relevante debe generar trazabilidad auditable.
-- Toda mejora de detector debe apoyarse en incidentes o datos observables.
-- Toda decisión de seguridad debe documentar riesgo mitigado y costo operativo.
+---
+
+### Al registrar una compra — `POST /api/inventory/compras`
+
+El AIS analiza la compra **sincrónicamente, antes de confirmar el stock**, usando umbrales estadísticos dinámicos calculados con el método IQR (Rango Intercuartílico) sobre el historial real de los últimos 90 días.
+
+---
+
+#### Umbrales dinámicos — Método IQR
+
+En lugar de umbrales fijos (ej. "3× promedio"), el sistema aprende del comportamiento histórico de cada producto:
+
+```
+IQR = Q3 − Q1                                  (rango intercuartílico)
+Umbral moderado = Q3 + 1.5 × IQR               → outlier leve (HIGH)
+Umbral extremo  = Q3 + 3.0 × IQR               → outlier severo (CRITICAL)
+```
+
+- Se requieren **al menos 5 compras históricas** en los últimos 90 días para calcular los umbrales.
+- Si hay menos de 5 observaciones, el sistema usa un fallback de **5× el promedio disponible**.
+- El mismo método se aplica al **precio unitario** (precio / cantidad) de la compra.
+
+**Analogía inmunológica:** Esto es la *memoria estadística* del sistema. El AIS aprende qué es "normal" para cada producto y reacciona cuando algo se sale del rango esperado — sin reglas fijas hardcodeadas.
+
+---
+
+**Caso 1 — Cantidad outlier moderado (alerta sin bloqueo)**
+> Condición: `cantidad > Q3 + 1.5 × IQR`
+
+```
+detectorType : UNUSUAL_PURCHASE
+severity     : HIGH
+description  : Compra inusual: N unidades de "X" supera umbral moderado (Q3+1.5×IQR = M) calculado sobre K compras de los últimos 90d
+metadata     : { productoId, cantidadSolicitada, q3, iqr, umbralModerado, umbralExtremo, observaciones, ventanaDias }
+```
+
+La compra **se registra normalmente** y el stock se incrementa. Se genera una alerta para revisión.
+
+**Caso 2 — Cantidad outlier extremo (compra bloqueada, requiere aprobación)**
+> Condición: `cantidad > Q3 + 3.0 × IQR`
+
+```
+detectorType : UNUSUAL_PURCHASE
+severity     : CRITICAL
+description  : Compra bloqueada: N unidades de "X" supera umbral extremo (Q3+3×IQR = M) calculado sobre K compras de los últimos 90d
+metadata     : { productoId, cantidadSolicitada, q3, iqr, umbralModerado, umbralExtremo,
+                 observaciones, ventanaDias, requiresApproval: true }
+```
+
+La compra queda en estado `PENDING_APPROVAL`. **El stock no se incrementa** hasta que un SUPER_ADMIN la apruebe o rechace.
+
+**Caso 3 — Precio unitario anómalo**
+> Misma lógica IQR aplicada al precio por unidad vs. historial del producto.
+
+```
+detectorType : PURCHASE_PRICE_ANOMALY
+severity     : MEDIUM (umbral moderado) / HIGH (umbral extremo)
+metadata     : { precioUnitarioIngresado, umbralModerado, umbralExtremo, medianaHistorica, observaciones }
+```
+
+---
+
+### Flujo de aprobación para compras bloqueadas
+
+Cuando una compra queda en `PENDING_APPROVAL`, el stock **no se mueve**. Se requiere la intervención de un usuario con permiso `sistema:configurar` (SUPER_ADMIN).
+
+```
+                 POST /api/inventory/compras
+                          │
+                          ▼
+              AIS analiza con IQR dinámico
+                          │
+          ┌───────────────┴───────────────┐
+          │ NORMAL / HIGH                 │ CRITICAL
+          ▼                               ▼
+  Compra status=NORMAL           Compra status=PENDING_APPROVAL
+  Stock incrementa               Stock NO incrementa
+  Anomalía HIGH → alerta         Anomalía CRITICAL → alerta bloqueante
+          │                               │
+          │               GET /api/immune/compras-pendientes
+          │                               │
+          │           ┌──────────────────┤
+          │           ▼ APPROVE           ▼ REJECT
+          │   status=APPROVED       status=REJECTED
+          │   Stock incrementa      Stock sin cambio
+          │   AnomalyLog cerrado    AnomalyLog cerrado
+          └───────────────────────────────┘
+```
+
+**Endpoints de gestión:**
+
+```bash
+# Listar compras pendientes de aprobación (solo SUPER_ADMIN)
+GET /api/immune/compras-pendientes
+
+# Aprobar o rechazar una compra bloqueada (solo SUPER_ADMIN)
+POST /api/immune/compras/:compraId/resolver
+Body: { "accion": "APPROVE" | "REJECT" }
+```
+
+> Al aprobar: la compra pasa a `APPROVED` y el stock en depósito se incrementa.
+> Al rechazar: la compra pasa a `REJECTED`, no hay movimiento de stock y la anomalía queda `acknowledged = true`.
+
+**Campos nuevos en la tabla `compra`:**
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `status` | enum | `NORMAL` / `PENDING_APPROVAL` / `APPROVED` / `REJECTED` |
+| `anomalyLogId` | string | ID del log de anomalía vinculado (cuando hay bloqueo) |
+| `approvedBy` | string | `userId` del SUPER_ADMIN que resolvió la compra |
+| `resolvedAt` | datetime | Timestamp de la resolución |
+
+---
+
+
+
+### Al registrar una venta — `POST /api/inventory/ventas`
+
+Después de que la transacción descuenta el stock de la sucursal, el AIS ejecuta `scanNuevaVenta` en segundo plano. Lee el stock **real post-venta** (no el stock antes).
+
+**Caso 1 — Stock agotado tras la venta**
+> Condición: `stock en sucursal = 0` después del descuento
+
+```
+detectorType : STOCK_THRESHOLD
+severity     : CRITICAL
+description  : Stock agotado tras venta: "NombreProducto" en sucursal "NombreSucursal"
+metadata     : { productoId, sucursalId, nombreProducto, nombreSucursal,
+                 cantidadVendida, stockResultante: 0 }
+```
+
+**Caso 2 — Stock en nivel crítico tras la venta**
+> Condición: `0 < stock ≤ 10 unidades` después del descuento
+
+```
+detectorType : STOCK_THRESHOLD
+severity     : HIGH
+description  : Stock crítico tras venta: "X" en "Y" — quedan N unidades
+metadata     : { productoId, sucursalId, nombreProducto, nombreSucursal,
+                 cantidadVendida, stockResultante, umbralMinimo: 10 }
+```
+
+> Si la venta no tiene `idSucursal` (venta sin sucursal asignada), no se ejecuta el escaneo reactivo porque no hay stock de sucursal que verificar.
+
+---
+
+### Al ejecutar un escaneo completo — `POST /api/immune/scan`
+
+El escaneo completo corre todos los detectores en secuencia. Requiere autenticación y permiso `anomalias:gestionar`.
+
+#### `StockThresholdDetector` — recorre toda la tabla `stock_levels`
+
+Evalúa cada fila de stock de productos activos:
+
+| Condición | `severity` | `detectorType` |
+|-----------|-----------|----------------|
+| `cantidad = 0` | CRITICAL | STOCK_THRESHOLD |
+| `0 < cantidad ≤ 10` | HIGH | STOCK_THRESHOLD |
+
+> Importante: el escaneo completo puede generar duplicados si ya existe una anomalía reactiva reciente del mismo producto. El flujo de `acknowledge` es el mecanismo para cerrar esos eventos.
+
+#### `UnusualMovementDetector` — analiza compras y ventas de las últimas 24 horas
+
+Para cada producto con actividad en las últimas 24h, calcula el promedio de los últimos 30 días y evalúa cada operación:
+
+| Condición | `severity` | `detectorType` |
+|-----------|-----------|----------------|
+| Compra/venta individual ≥ 3x promedio 30d | HIGH | UNUSUAL_MOVEMENT |
+| > 5 compras del mismo producto en 24h | MEDIUM | UNUSUAL_MOVEMENT |
+
+---
+
+### Qué queda guardado en `anomaly_logs`
+
+Cada anomalía genera un registro con esta estructura:
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `id` | `cuid` | Identificador único del evento |
+| `detectorType` | texto | Tipo de detector que la generó |
+| `severity` | enum | `LOW` / `MEDIUM` / `HIGH` / `CRITICAL` |
+| `description` | texto | Descripción legible del evento |
+| `metadata` | JSON | Contexto completo: IDs, valores, promedios, ratios |
+| `acknowledged` | boolean | `false` = pendiente / `true` = atendida |
+| `createdAt` | timestamp | Fecha y hora exacta del evento |
+
+El campo `metadata` varía según el detector pero siempre incluye los IDs de las entidades involucradas para poder trazar el origen del evento.
+
+---
+
+### Cómo ver y atender las anomalías
+
+```bash
+# Ver todas las anomalías pendientes
+GET /api/immune/anomalies?acknowledged=false
+
+# Filtrar por severidad
+GET /api/immune/anomalies?severity=CRITICAL
+
+# Filtrar por tipo de detector
+GET /api/immune/anomalies?detectorType=STOCK_THRESHOLD
+
+# Estado general del sistema inmune (contadores por severidad)
+GET /api/immune/status
+
+# Marcar una anomalía como atendida (cerrar el evento)
+PATCH /api/immune/anomalies/:id/acknowledge
+```
+
+Una vez atendida, la anomalía sale de los contadores pendientes pero permanece en el historial para auditoría.
+
+---
+
+
+
+Este proyecto aplica un modelo de cuatro capas inspirado en inmunología. A continuación se documenta exactamente dónde y cómo se implementa cada principio en el código.
+
+---
+
+### 1) Self — Defensas internas del sistema
+
+> El "Self" representa lo que el propio sistema protege desde adentro: validación de datos, identidad, autorización y manejo de errores. Cualquier cosa que ingrese al sistema debe pasar estas barreras antes de afectar la lógica de negocio.
+
+#### Validación de entradas con Zod
+**Archivo:** `backend-erp/src/modules/inventory/inventory.controller.ts`
+
+Cada operación de inventario tiene su propio schema Zod que se valida antes de llamar al servicio. Si el payload no cumple, Zod lanza un error estructurado que el `errorHandler` captura y devuelve sin exponer detalles internos.
+
+```ts
+// Crear producto — se valida nombre, precio y tipo antes de tocar la BD
+const productoCreateSchema = z.object({
+  nombre: z.string().min(1).max(255).trim(),  // .trim() previene padding malicioso
+  precio: z.number().positive().max(999_999_999_999.999),
+  idTipoProducto: z.number().int().positive(),
+});
+
+// Registrar compra — todos los campos requeridos con tipos exactos
+const compraSchema = z.object({
+  fecha: z.string().datetime({ offset: true }).or(z.string().date()),
+  idProducto: z.number().int().positive(),
+  cantidad: z.number().int().positive(),
+  precio: z.number().positive(),
+  idProveedor: z.number().int().positive(),
+});
+```
+
+Lo mismo aplica para `ventaSchema`, `sucursalCreateSchema` y `proveedorCreateSchema`. **Ningún dato externo llega al ORM sin pasar primero por Zod.**
+
+#### Autenticación JWT
+**Archivo:** `backend-erp/src/middleware/auth.ts`
+**Aplicado en:** `backend-erp/src/modules/immune-system/immune.routes.ts`
+
+Todas las rutas del sistema inmunológico requieren un token válido. El middleware `authenticate` verifica la firma del JWT y adjunta el payload (`userId`, `role`, `permisos[]`) al objeto `req.user`:
+
+```ts
+// immune.routes.ts — todas las rutas del AIS están detrás de authenticate
+router.use(authenticate);
+```
+
+Si el token está ausente, expirado o manipulado, la respuesta es `401` sin exponer información interna.
+
+#### Autorización por permiso explícito
+**Archivo:** `backend-erp/src/modules/immune-system/immune.routes.ts`
+
+El escaneo completo es una operación sensible. Solo usuarios con el permiso `anomalias:gestionar` (SUPER_ADMIN, ADMINISTRADOR) pueden ejecutarlo:
+
+```ts
+router.post("/scan", authorize("anomalias:gestionar"), immuneController.runScan);
+```
+
+Intentar acceder con un rol sin ese permiso devuelve `403`.
+
+#### ORM Prisma — sin SQL manual
+**Archivos:** todos los `*.service.ts`
+
+Ninguna consulta usa SQL crudo (`$queryRaw` / `$executeRaw`). Prisma parametriza automáticamente todas las consultas, eliminando el riesgo de inyección SQL. Los filtros, joins e inserciones pasan siempre por el API tipado del cliente Prisma.
+
+#### Manejo centralizado de errores
+**Archivo:** `backend-erp/src/middleware/errorHandler.ts`
+
+Todos los errores de la aplicación (incluyendo errores de Prisma y de Zod) pasan por un único middleware. En producción, el mensaje interno no se expone al cliente; solo se devuelve el código HTTP y un mensaje operativo.
+
+#### Escaneos reactivos como barrera interna (Self activo)
+**Archivo:** `backend-erp/src/modules/inventory/inventory.service.ts`
+
+Los escaneos reactivos operan como anticuerpos internos que se activan **desde dentro del servicio**, no desde un endpoint externo. Cualquier operación de inventario que persista un dato también dispara una verificación automática del AIS:
+
+```ts
+// En createProducto — tras guardar en BD, el AIS analiza el precio
+scanNuevoProducto(producto.id).catch(() => undefined);
+
+// En registrarCompra — tras la transacción, el AIS analiza cantidad y precio
+scanNuevaCompra({ idProducto, cantidad, precio }).catch(() => undefined);
+
+// En registrarVenta — tras decrementar el stock, el AIS revisa el nivel resultante
+scanNuevaVenta({ idProducto, cantidad, idSucursal }).catch(() => undefined);
+```
+
+El `.catch(() => undefined)` garantiza que un fallo del AIS nunca interrumpe la operación principal. El sistema de inventario funciona aun si el AIS falla.
+
+---
+
+### 2) Non-Self — Defensas externas y perímetro
+
+> El "Non-Self" representa las medidas de protección del entorno: configuración segura, red, y acceso a infraestructura. Todo lo que rodea al sistema pero no vive en el código de la aplicación.
+
+#### Variables de entorno
+**Archivo:** `backend-erp/src/config/env.ts`
+
+Ninguna credencial está hardcodeada. `DATABASE_URL`, `JWT_SECRET` y `PORT` se leen desde `.env` vía `dotenv`. El archivo `.env` está en `.gitignore` y nunca se sube al repositorio.
+
+```ts
+export const env = {
+  DATABASE_URL: process.env.DATABASE_URL!,
+  JWT_SECRET: process.env.JWT_SECRET || "dev-secret-change-me",
+  JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || "7d",
+} as const;
+```
+
+> **Nota:** En producción, `JWT_SECRET` debe tener al menos 32 caracteres aleatorios. El valor `dev-secret-change-me` solo es aceptable en desarrollo local.
+
+#### Seguridad HTTP (Helmet + CORS)
+**Archivo:** `backend-erp/src/app.ts`
+
+Helmet establece cabeceras HTTP de seguridad (`X-Content-Type-Options`, `Strict-Transport-Security`, `X-Frame-Options`, etc.). CORS limita los orígenes permitidos según el entorno.
+
+#### Usuario de base de datos con mínimo privilegio
+El usuario `erp_user` tiene acceso únicamente a `erp_db`. No puede crear ni eliminar otras bases de datos en producción. Las credenciales de `postgres` (superusuario) no se usan en la aplicación.
+
+#### Separación de ambientes
+La variable `NODE_ENV` controla comportamientos distintos entre `development` y `production` (nivel de logging, mensajes de error, CORS, etc.).
+
+---
+
+### 3) Anticuerpo — Respuesta preventiva y correctiva
+
+> Los "anticuerpos" son los detectores de anomalías: mecanismos concretos que identifican patrones de riesgo, los registran con severidad y permiten cerrar el ciclo de respuesta.
+
+#### Detector de umbral de stock — `StockThresholdDetector`
+**Archivo:** `backend-erp/src/modules/immune-system/detectors/stock-threshold.detector.ts`
+**Analogía:** PRR (Pattern Recognition Receptor) — respuesta innata inmediata, sin aprendizaje previo.
+
+Opera en dos modos:
+- **Escaneo completo:** recorre todos los `StockLevel` de productos activos y detecta niveles en 0 o por debajo del umbral mínimo operativo (10 unidades).
+- **Reactivo tras venta:** después de cada `registrarVenta`, `scanNuevaVenta` lee el stock post-transacción y genera la anomalía si el resultado es crítico.
+
+```
+Stock = 0            → detectorType: STOCK_THRESHOLD   severity: CRITICAL
+Stock ≤ 10 unidades  → detectorType: STOCK_THRESHOLD   severity: HIGH
+```
+
+El umbral de 10 unidades está en la constante `LOW_STOCK_THRESHOLD` del detector y es ajustable sin modificar la lógica de detección.
+
+#### Detector de movimientos inusuales — `UnusualMovementDetector`
+**Archivo:** `backend-erp/src/modules/immune-system/detectors/unusual-movement.detector.ts`
+**Analogía:** Células T de memoria — conocen el patrón "normal" y reaccionan ante desviaciones.
+
+Analiza las compras y ventas de las últimas 24 horas comparándolas con el promedio histórico de 30 días del mismo producto:
+
+```
+Compra/venta individual ≥ 3x promedio 30d   → UNUSUAL_MOVEMENT   HIGH
+                        ≥ 10x promedio 30d  → UNUSUAL_MOVEMENT   CRITICAL (por ratio)
+> 5 compras del mismo producto en 24h       → UNUSUAL_MOVEMENT   MEDIUM
+```
+
+La ventana de 30 días es configurable. Cuantos más datos históricos existan, más precisa es la detección.
+
+#### Detector reactivo de precio de producto — `scanNuevoProducto`
+**Archivo:** `backend-erp/src/modules/immune-system/immune.service.ts`
+**Se activa:** automáticamente al crear un producto vía `POST /api/inventory/products`.
+
+Compara el precio del nuevo producto con el promedio de los demás productos del mismo tipo:
+
+```
+Precio = 0                → PRICE_ANOMALY   HIGH   (dato incompleto o error de carga)
+Precio > 10x promedio tipo → PRICE_ANOMALY   HIGH
+Precio > 50x promedio tipo → PRICE_ANOMALY   CRITICAL
+```
+
+#### Detector reactivo de compra inusual — `scanNuevaCompra`
+**Archivo:** `backend-erp/src/modules/immune-system/immune.service.ts`
+**Se activa:** automáticamente al registrar una compra vía `POST /api/inventory/compras`.
+
+Dos verificaciones independientes:
+
+```
+Cantidad ≥ 3x promedio 30d           → UNUSUAL_PURCHASE        HIGH
+Cantidad ≥ 10x promedio 30d          → UNUSUAL_PURCHASE        CRITICAL
+Precio compra > 150% del precio venta → PURCHASE_PRICE_ANOMALY  MEDIUM
+```
+
+La verificación de precio de compra vs precio de venta actúa como señal de alerta operativa: si se paga más de 1.5x el precio de venta, puede indicar un error de carga o un proveedor con condiciones fuera de mercado.
+
+#### Flujo de atención de anomalías — `acknowledge`
+**Endpoint:** `PATCH /api/immune/anomalies/:id/acknowledge`
+**Archivo:** `backend-erp/src/modules/immune-system/immune.service.ts`
+
+Cada anomalía pasa por el ciclo: **detectada → pendiente → atendida**. Al hacer `acknowledge`, el campo `acknowledged = true` cierra el evento y lo saca del contador de anomalías pendientes en `/api/immune/status`. El registro permanece en la tabla `anomaly_logs` con todo su `metadata` para auditoría futura.
+
+#### Escalas de severidad
+
+| Severidad | Significado operativo | Acción sugerida |
+|-----------|----------------------|-----------------|
+| `CRITICAL` | Stock agotado o precio completamente fuera de rango | Acción inmediata |
+| `HIGH` | Stock crítico, compra/venta inusual, precio anómalo | Revisión en el día |
+| `MEDIUM` | Sobrestock, ráfaga de movimientos, precio de compra alto | Revisión en la semana |
+| `LOW` | Desviación leve (reservado para detectores futuros) | Monitoreo |
+
+---
+
+### 4) Memoria — Aprendizaje organizacional
+
+> La "Memoria" es la capacidad del sistema y del equipo de aprender de los eventos pasados. En el AIS biológico, los linfocitos B de memoria recuerdan patógenos previos para responder más rápido. Aquí, el equivalente es el historial auditable de anomalías y el ajuste periódico de reglas.
+
+#### Tabla `anomaly_logs` — registro histórico persistente
+**Archivo:** `backend-erp/prisma/schema.prisma`
+
+Cada anomalía detectada se persiste con:
+- `detectorType` — qué detector la encontró
+- `severity` — nivel de riesgo
+- `description` — descripción legible del evento
+- `metadata` (JSON) — contexto completo: IDs, valores numéricos, promedios históricos, ratios
+- `acknowledged` — si fue atendida
+- `createdAt` — timestamp exacto del evento
+
+Este registro es la base de datos de incidentes del sistema. Permite responder: *¿cuántas veces se agotó el stock del producto X en los últimos 6 meses?* o *¿qué proveedor genera más alertas de precio?*
+
+#### Promedio histórico como memoria operativa
+**Archivo:** `backend-erp/src/modules/immune-system/detectors/unusual-movement.detector.ts`
+
+El `UnusualMovementDetector` y `scanNuevaCompra` usan el promedio de los últimos 30 días como línea base de comportamiento normal. Esto es memoria operativa automatizada: el sistema recuerda el patrón habitual del inventario y lo usa como referencia para detectar desviaciones. Cuanto más datos acumule la base, más precisa es esta detección.
+
+```ts
+// El sistema "recuerda" el comportamiento de los últimos 30 días
+const stats = await prisma.compra.aggregate({
+  where: { idProducto, fecha: { gte: thirtyDaysAgo } },
+  _avg: { cantidad: true },
+});
+```
+
+#### Ciclo de aprendizaje sugerido
+
+Para que el principio de Memoria sea efectivo operativamente, el equipo debe seguir este ciclo:
+
+1. **Revisar** anomalías pendientes en `/immune` al inicio de cada jornada.
+2. **Atender** (`acknowledge`) las anomalías revisadas, registrando la causa raíz en el `metadata` si aplica.
+3. **Analizar** patrones: si un detector genera demasiados falsos positivos, el umbral debe ajustarse (ej. `LOW_STOCK_THRESHOLD` en `stock-threshold.detector.ts`).
+4. **Ajustar** detectores o agregar nuevos según incidentes reales observados en el historial.
+5. **Documentar** en este README los cambios de reglas y los incidentes que los motivaron.
+
+#### Cómo agregar un nuevo detector
+
+Para extender el AIS con un nuevo tipo de anomalía (ej. detección de fraude por patrón de cliente, o alerta de precio estacional):
+
+```ts
+// 1. Crear el archivo del detector
+// backend-erp/src/modules/immune-system/detectors/mi-nuevo.detector.ts
+
+import { AnomalyDetector, AnomalyDetectorResult } from "./base-detector.js";
+
+export class MiNuevoDetector implements AnomalyDetector {
+  readonly type = "MI_TIPO";
+  readonly description = "Descripción del patrón que detecta";
+
+  async scan(): Promise<AnomalyDetectorResult[]> {
+    // lógica de detección usando prisma
+    return [];
+  }
+}
+
+// 2. Registrarlo en immune.service.ts
+import { MiNuevoDetector } from "./detectors/mi-nuevo.detector.js";
+
+const detectors: AnomalyDetector[] = [
+  new StockThresholdDetector(),
+  new UnusualMovementDetector(),
+  new MiNuevoDetector(),   // ← se incluye automáticamente en runFullScan
+];
+```
+
+No se requiere modificar ningún otro archivo. El nuevo detector se ejecuta en cada escaneo completo y sus anomalías se registran con el mismo flujo.
+
+---
+
+### Mapa completo: operación → principio AIS → archivo
+
+| Operación de inventario | Principio AIS | Mecanismo | Archivo |
+|------------------------|---------------|-----------|---------|
+| Cualquier endpoint | **Self** | Autenticación JWT obligatoria | `middleware/auth.ts` |
+| `POST /api/inventory/products` | **Self** | Validación Zod de payload | `inventory/inventory.controller.ts` |
+| `POST /api/inventory/products` | **Anticuerpo** | `scanNuevoProducto` — alerta de precio anómalo | `immune-system/immune.service.ts` |
+| `POST /api/inventory/compras` | **Self** | Validación Zod de payload | `inventory/inventory.controller.ts` |
+| `POST /api/inventory/compras` | **Anticuerpo** | `scanNuevaCompra` — alerta de cantidad y precio | `immune-system/immune.service.ts` |
+| `POST /api/inventory/ventas` | **Self** | Validación Zod + control de stock insuficiente | `inventory/inventory.controller.ts` |
+| `POST /api/inventory/ventas` | **Anticuerpo** | `scanNuevaVenta` — alerta de stock crítico post-venta | `immune-system/immune.service.ts` |
+| `POST /api/immune/scan` | **Self** | Requiere permiso `anomalias:gestionar` | `immune-system/immune.routes.ts` |
+| `POST /api/immune/scan` | **Anticuerpo** | `StockThresholdDetector` + `UnusualMovementDetector` | `immune-system/detectors/` |
+| `PATCH /api/immune/anomalies/:id/acknowledge` | **Anticuerpo** | Cierra el ciclo de respuesta | `immune-system/immune.service.ts` |
+| Historial `anomaly_logs` | **Memoria** | Promedio 30d como referencia de normalidad | `immune-system/detectors/unusual-movement.detector.ts` |
+| Todas las consultas a BD | **Self** + **Non-Self** | ORM Prisma (sin SQL crudo) | Todos los `*.service.ts` |
+| Credenciales y secretos | **Non-Self** | Variables de entorno vía `.env` | `config/env.ts` |
+
+
 
 ## Inicio rápido
 

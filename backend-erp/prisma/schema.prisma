@@ -145,7 +145,7 @@ model TipoProducto {
 }
 
 model Producto {
-  id              Int          @id   // IdProducto del dump
+  id              Int          @id @default(autoincrement())
   nombre          String       @map("producto")
   precio          Decimal      @db.Decimal(15, 3)
   idTipoProducto  Int          @map("id_tipo_producto")
@@ -161,7 +161,7 @@ model Producto {
 }
 
 model Sucursal {
-  id          Int      @id  // IdSucursal del dump
+  id          Int      @id @default(autoincrement())
   nombre      String   @map("sucursal")
   domicilio   String?
   idLocalidad Int      @map("id_localidad")
@@ -179,7 +179,7 @@ model Sucursal {
 }
 
 model Proveedor {
-  id          Int     @id  // IdProveedor del dump
+  id          Int     @id @default(autoincrement())
   nombre      String?
   domicilio   String?
   idLocalidad Int     @map("id_localidad")
@@ -201,12 +201,16 @@ model CanalVenta {
 }
 
 model Compra {
-  id          Int      @id  // IdCompra del dump
-  fecha       DateTime @db.Date
-  idProducto  Int      @map("id_producto")
-  cantidad    Int
-  precio      Decimal  @db.Decimal(10, 2)
-  idProveedor Int      @map("id_proveedor")
+  id           Int           @id @default(autoincrement())
+  fecha        DateTime      @db.Date
+  idProducto   Int           @map("id_producto")
+  cantidad     Int
+  precio       Decimal       @db.Decimal(10, 2)
+  idProveedor  Int           @map("id_proveedor")
+  status       CompraStatus  @default(NORMAL)
+  anomalyLogId String?       @map("anomaly_log_id")  // referencia a la anomalía que la bloqueó
+  approvedBy   String?       @map("approved_by")      // userId del SUPER_ADMIN que aprobó/rechazó
+  resolvedAt   DateTime?     @map("resolved_at")
 
   producto  Producto  @relation(fields: [idProducto], references: [id])
   proveedor Proveedor @relation(fields: [idProveedor], references: [id])
@@ -214,6 +218,7 @@ model Compra {
   @@index([idProducto])
   @@index([idProveedor])
   @@index([fecha])
+  @@index([status])
   @@map("compra")
 }
 
@@ -236,7 +241,7 @@ model Cliente {
 }
 
 model Venta {
-  id            Int      @id
+  id            Int      @id @default(autoincrement())
   fecha         DateTime @db.Date
   fechaEntrega  DateTime @db.Date @map("fecha_entrega")
   idCanal       Int?     @map("id_canal")
@@ -283,6 +288,13 @@ enum Severity {
   MEDIUM
   HIGH
   CRITICAL
+}
+
+enum CompraStatus {
+  PENDING_APPROVAL   // bloqueada, requiere aprobación SUPER_ADMIN
+  APPROVED           // aprobada explícitamente
+  REJECTED           // rechazada por SUPER_ADMIN
+  NORMAL             // ingresada sin anomalía (flujo habitual)
 }
 
 model AnomalyLog {
