@@ -263,13 +263,17 @@ export async function registrarVenta(input: CreateVentaInput) {
   const producto = await prisma.producto.findUnique({ where: { id: input.idProducto } });
   if (!producto) throw new AppError(404, "Producto no encontrado");
 
-  if (input.idSucursal) {
-    const stock = await prisma.stockLevel.findUnique({
-      where: { idProducto_idSucursal: { idProducto: input.idProducto, idSucursal: input.idSucursal } },
-    });
-    if (!stock || stock.cantidad < input.cantidad) {
-      throw new AppError(422, "Stock insuficiente en la sucursal");
-    }
+  // El precio de venta siempre proviene del catálogo — no se acepta precio libre
+  const precio = Number(producto.precio);
+
+  // Sucursal es obligatoria: el stock se descuenta de la sucursal del empleado
+  if (!input.idSucursal) throw new AppError(422, "La sucursal es obligatoria para registrar una venta");
+
+  const stock = await prisma.stockLevel.findUnique({
+    where: { idProducto_idSucursal: { idProducto: input.idProducto, idSucursal: input.idSucursal } },
+  });
+  if (!stock || stock.cantidad < input.cantidad) {
+    throw new AppError(422, "Stock insuficiente en la sucursal");
   }
 
   const venta = await prisma.$transaction(async (tx) => {
@@ -282,17 +286,15 @@ export async function registrarVenta(input: CreateVentaInput) {
         idSucursal: input.idSucursal,
         idEmpleado: input.idEmpleado,
         idProducto: input.idProducto,
-        precio: input.precio,
+        precio,
         cantidad: input.cantidad,
       },
     });
 
-    if (input.idSucursal) {
-      await tx.stockLevel.update({
-        where: { idProducto_idSucursal: { idProducto: input.idProducto, idSucursal: input.idSucursal } },
-        data: { cantidad: { decrement: input.cantidad } },
-      });
-    }
+    await tx.stockLevel.update({
+      where: { idProducto_idSucursal: { idProducto: input.idProducto, idSucursal: input.idSucursal! } },
+      data: { cantidad: { decrement: input.cantidad } },
+    });
 
     return v;
   });
@@ -340,4 +342,40 @@ export async function getStockLevels(idSucursal?: number) {
     },
     orderBy: { cantidad: "asc" },
   });
+}
+
+export async function transferirStock(input: {
+  idProducto: number;
+  idSucursalOrigen: number;
+  idSucursalDestino: number;
+  cantidad: number;
+}) {
+  const stockOrigen = await prisma.stockLevel.findUnique({
+    where: { idProducto_idSucursal: { idProducto: input.idProducto, idSucursal: input.idSucursalOrigen } },
+    include: { producto: true, sucursal: true },
+  });
+  if (!stockOrigen || stockOrigen.cantidad < input.cantidad) {
+    throw new AppError(422, "Stock insuficiente en la sucursal de origen");
+  }
+
+  await prisma.$transaction([
+    prisma.stockLevel.update({
+      where: { idProducto_idSucursal: { idProducto: input.idProducto, idSucursal: input.idSucursalOrigen } },
+      data: { cantidad: { decrement: input.cantidad } },
+    }),
+    prisma.stockLevel.upsert({
+      where: { idProducto_idSucursal: { idProducto: input.idProducto, idSucursal: input.idSucursalDestino } },
+      update: { cantidad: { increment: input.cantidad } },
+      create: { idProducto: input.idProducto, idSucursal: input.idSucursalDestino, cantidad: input.cantidad },
+    }),
+  ]);
+
+  return {
+    ok: true,
+    mensaje: `${input.cantidad} unidades de "${stockOrigen.producto.nombre}" transferidas`,
+    productoId: input.idProducto,
+    origen: input.idSucursalOrigen,
+    destino: input.idSucursalDestino,
+    cantidad: input.cantidad,
+  };
 }

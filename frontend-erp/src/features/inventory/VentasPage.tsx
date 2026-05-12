@@ -3,6 +3,7 @@ import { Search, Plus } from "lucide-react";
 import { api } from "../../api/client";
 import { Modal } from "../../components/Modal";
 import { usePermisos } from "../../hooks/usePermisos";
+import { useAuthStore } from "../../stores/authStore";
 import type { Venta, Product, Sucursal } from "../../types";
 
 interface VentaForm {
@@ -10,7 +11,6 @@ interface VentaForm {
   fechaEntrega: string;
   idProducto: string;
   cantidad: string;
-  precio: string;
   idSucursal: string;
 }
 
@@ -20,12 +20,12 @@ const emptyForm: VentaForm = {
   fechaEntrega: today,
   idProducto: "",
   cantidad: "",
-  precio: "",
   idSucursal: "",
 };
 
 export function VentasPage() {
   const can = usePermisos();
+  const user = useAuthStore((s) => s.user);
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [sucursales, setSucursales] = useState<Sucursal[]>([]);
@@ -36,6 +36,10 @@ export function VentasPage() {
   const [form, setForm] = useState<VentaForm>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+
+  // Sucursal fija del empleado (si la tiene)
+  const empleadoSucursalId = user?.empleado?.idSucursal;
+  const isVendedor = user?.rol === "VENDEDOR";
 
   useEffect(() => {
     Promise.all([
@@ -60,26 +64,39 @@ export function VentasPage() {
 
   const totalVentas = ventas.reduce((sum, v) => sum + Number(v.precio) * v.cantidad, 0);
 
+  // Precio del producto seleccionado (siempre desde el catálogo)
+  const selectedProduct = products.find((p) => String(p.id) === form.idProducto);
+  const catalogPrice = selectedProduct ? Number(selectedProduct.precio) : null;
+
   function openCreate() {
     const now = new Date().toISOString().split("T")[0];
-    setForm({ ...emptyForm, fecha: now, fechaEntrega: now });
+    setForm({
+      ...emptyForm,
+      fecha: now,
+      fechaEntrega: now,
+      idSucursal: empleadoSucursalId ? String(empleadoSucursalId) : "",
+    });
     setFormError("");
     setModalOpen(true);
   }
 
   function handleProductChange(id: string) {
-    const producto = products.find((p) => String(p.id) === id);
-    setForm((f) => ({
-      ...f,
-      idProducto: id,
-      precio: producto ? String(producto.precio) : f.precio,
-    }));
+    setForm((f) => ({ ...f, idProducto: id }));
   }
 
   async function handleSave() {
     setFormError("");
-    if (!form.fecha || !form.fechaEntrega || !form.idProducto || !form.cantidad || !form.precio) {
-      setFormError("Fecha, producto, cantidad y precio son obligatorios.");
+    if (!form.fecha || !form.fechaEntrega || !form.idProducto || !form.cantidad) {
+      setFormError("Fecha, producto y cantidad son obligatorios.");
+      return;
+    }
+    const cantidadNum = parseInt(form.cantidad);
+    if (isNaN(cantidadNum) || cantidadNum < 1 || cantidadNum > 9999) {
+      setFormError("La cantidad debe estar entre 1 y 9.999 unidades.");
+      return;
+    }
+    if (!form.idSucursal) {
+      setFormError("La sucursal es obligatoria.");
       return;
     }
     setSaving(true);
@@ -88,9 +105,9 @@ export function VentasPage() {
         fecha: form.fecha,
         fechaEntrega: form.fechaEntrega,
         idProducto: parseInt(form.idProducto),
-        cantidad: parseInt(form.cantidad),
-        precio: parseFloat(form.precio),
-        idSucursal: form.idSucursal ? parseInt(form.idSucursal) : undefined,
+        cantidad: cantidadNum,
+        idSucursal: parseInt(form.idSucursal),
+        // precio omitido: el backend usa el precio del catálogo
       };
       const { data } = await api.post<Venta>("/inventory/ventas", payload);
       setVentas((prev) => [data, ...prev]);
@@ -106,7 +123,14 @@ export function VentasPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-semibold text-slate-800">Ventas</h1>
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">Ventas</h1>
+          {empleadoSucursalId && sucursales.length > 0 && (
+            <p className="text-sm text-indigo-600 mt-0.5 font-medium">
+              Sucursal: {sucursales.find((s) => s.id === empleadoSucursalId)?.nombre ?? `#${empleadoSucursalId}`}
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-slate-500">
             Total: <span className="font-semibold text-slate-700">${totalVentas.toLocaleString("es-CL")}</span>
@@ -195,6 +219,7 @@ export function VentasPage() {
               />
             </div>
           </div>
+
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Producto</label>
             <select
@@ -208,12 +233,32 @@ export function VentasPage() {
               ))}
             </select>
           </div>
+
+          {/* Precio del catálogo — solo lectura */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Precio unitario
+              <span className="ml-2 text-xs font-normal text-slate-400">(precio de catálogo)</span>
+            </label>
+            <input
+              type="text"
+              readOnly
+              value={
+                catalogPrice !== null
+                  ? `$${catalogPrice.toLocaleString("es-CL")}`
+                  : "— selecciona un producto —"
+              }
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 text-slate-500 cursor-not-allowed"
+            />
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Cantidad</label>
               <input
                 type="number"
                 min="1"
+                max="9999"
                 step="1"
                 value={form.cantidad}
                 onChange={(e) => setForm({ ...form, cantidad: e.target.value })}
@@ -222,34 +267,49 @@ export function VentasPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Precio unitario</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Total estimado</label>
               <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.precio}
-                onChange={(e) => setForm({ ...form, precio: e.target.value })}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                placeholder="0.00"
+                type="text"
+                readOnly
+                value={
+                  catalogPrice !== null && form.cantidad
+                    ? `$${(catalogPrice * (parseInt(form.cantidad) || 0)).toLocaleString("es-CL")}`
+                    : "—"
+                }
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 text-slate-500 cursor-not-allowed"
               />
             </div>
           </div>
+
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
-              Sucursal <span className="text-slate-400 font-normal">(opcional)</span>
-            </label>
-            <select
-              value={form.idSucursal}
-              onChange={(e) => setForm({ ...form, idSucursal: e.target.value })}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="">Sin sucursal</option>
-              {sucursales.map((s) => (
-                <option key={s.id} value={s.id}>{s.nombre}</option>
-              ))}
-            </select>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Sucursal</label>
+            {empleadoSucursalId ? (
+              // Empleado con sucursal asignada: campo de solo lectura
+              <input
+                type="text"
+                readOnly
+                value={
+                  sucursales.find((s) => s.id === empleadoSucursalId)?.nombre ??
+                  `Sucursal #${empleadoSucursalId}`
+                }
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 text-slate-500 cursor-not-allowed"
+              />
+            ) : (
+              // Administradores: selector libre
+              <select
+                value={form.idSucursal}
+                onChange={(e) => setForm({ ...form, idSucursal: e.target.value })}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">Seleccionar sucursal...</option>
+                {sucursales.map((s) => (
+                  <option key={s.id} value={s.id}>{s.nombre}</option>
+                ))}
+              </select>
+            )}
           </div>
-          {formError && <p className="text-sm text-red-600">{formError}</p>}
+
+          {formError && <p className="text-sm text-red-600 bg-red-50 rounded px-3 py-2">{formError}</p>}
           <div className="flex justify-end gap-2 pt-2">
             <button
               onClick={() => setModalOpen(false)}

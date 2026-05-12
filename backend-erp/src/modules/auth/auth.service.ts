@@ -28,7 +28,7 @@ async function getUserWithPermisos(id: string) {
           },
         },
       },
-      empleado: { select: { id: true, nombre: true, apellido: true } },
+      empleado: { select: { id: true, nombre: true, apellido: true, idSucursal: true } },
     },
   });
 }
@@ -41,6 +41,9 @@ export async function register(input: RegisterInput) {
 
   const rol = await prisma.rol.findUnique({ where: { id: input.rolId } });
   if (!rol) throw new AppError(400, "Rol no válido");
+  if (rol.nombre === "SUPER_ADMIN") {
+    throw new AppError(403, "No se puede registrar con el rol SUPER_ADMIN");
+  }
 
   const hashedPassword = await bcrypt.hash(input.password, 12);
   const user = await prisma.user.create({
@@ -54,7 +57,7 @@ export async function register(input: RegisterInput) {
 
   const full = await getUserWithPermisos(user.id);
   const permisos = full!.rol.permisos.map((rp) => rp.permiso.codigo);
-  const token = signToken(user.id, user.email, rol.nombre, permisos, undefined);
+  const token = signToken(user.id, user.email, rol.nombre, permisos, undefined, undefined);
 
   return {
     user: { id: user.id, email: user.email, name: user.name, rol: rol.nombre },
@@ -81,6 +84,7 @@ export async function login(input: LoginInput) {
     full!.rol.nombre,
     permisos,
     full!.empleado?.id,
+    full!.empleado?.idSucursal,
   );
 
   return {
@@ -117,9 +121,13 @@ function signToken(
   role: string,
   permisos: string[],
   empleadoId?: number,
+  sucursalId?: number,
 ): string {
   return jwt.sign(
-    { userId, email, role, permisos, ...(empleadoId && { empleadoId }) },
+    { userId, email, role, permisos,
+      ...(empleadoId && { empleadoId }),
+      ...(sucursalId && { sucursalId }),
+    },
     env.JWT_SECRET,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     { expiresIn: env.JWT_EXPIRES_IN as any },

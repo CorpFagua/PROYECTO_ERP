@@ -10,6 +10,8 @@ import { VentasPage } from "./features/inventory/VentasPage";
 import { ComprasPage } from "./features/inventory/ComprasPage";
 import { ProveedoresPage } from "./features/inventory/ProveedoresPage";
 import { ImmunePage } from "./features/immune/ImmunePage";
+import { UsuariosPage } from "./features/users/UsuariosPage";
+import { PermisosPage } from "./features/users/PermisosPage";
 
 export const router = createBrowserRouter([
   {
@@ -33,6 +35,8 @@ export const router = createBrowserRouter([
       { path: "compras", element: <ComprasPage /> },
       { path: "proveedores", element: <ProveedoresPage /> },
       { path: "immune", element: <ImmunePage /> },
+      { path: "usuarios", element: <UsuariosPage /> },
+      { path: "permisos", element: <PermisosPage /> },
     ],
   },
 ]);

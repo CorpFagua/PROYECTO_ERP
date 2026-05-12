@@ -359,6 +359,7 @@ export async function scanNuevaVenta(input: {
     const anomalias: AnomalyDetectorResult[] = [];
     const cantidadPost = stockLevel.cantidad; // valor ya decrementado por la transacción
 
+    // ── STOCK_THRESHOLD ──────────────────────────────────────
     if (cantidadPost === 0) {
       anomalias.push({
         detected: true,
@@ -388,6 +389,34 @@ export async function scanNuevaVenta(input: {
           cantidadVendida: input.cantidad,
           stockResultante: cantidadPost,
           umbralMinimo: LOW_STOCK_THRESHOLD,
+        },
+      });
+    }
+
+    // ── UNUSUAL_MOVEMENT ─────────────────────────────────────
+    // Compara la cantidad vendida contra el promedio de los últimos 30 días
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const stats = await prisma.venta.aggregate({
+      where: { idProducto: input.idProducto, fecha: { gte: thirtyDaysAgo } },
+      _avg: { cantidad: true },
+      _count: true,
+    });
+    const avgCantidad = Number(stats._avg.cantidad ?? 0);
+    // Solo aplica si hay historial suficiente (>= 3 ventas previas) y la actual supera 3x el promedio
+    if (stats._count >= 3 && avgCantidad > 0 && input.cantidad > avgCantidad * 3) {
+      const ratio = input.cantidad / avgCantidad;
+      anomalias.push({
+        detected: true,
+        detectorType: "UNUSUAL_MOVEMENT",
+        severity: "HIGH",
+        description: `Venta inusual: ${input.cantidad} unidades de "${producto.nombre}" (promedio 30d: ${Math.round(avgCantidad)}, ${ratio.toFixed(1)}x superior)`,
+        metadata: {
+          tipo: "VENTA",
+          productoId: input.idProducto,
+          nombreProducto: producto.nombre,
+          cantidad: input.cantidad,
+          promedio30d: Math.round(avgCantidad),
+          ratio: parseFloat(ratio.toFixed(2)),
         },
       });
     }

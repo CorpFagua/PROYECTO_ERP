@@ -4,6 +4,7 @@ export interface Empleado {
   id: number;
   nombre: string | null;
   apellido: string | null;
+  idSucursal?: number;
 }
 
 export interface User {
@@ -146,3 +147,37 @@ export interface ScanResult {
     metadata?: Record<string, unknown>;
   }[];
 }
+
+// ─── Usuarios / Roles / Permisos ─────────────────────────────
+
+export interface RolSimple {
+  id: number;
+  nombre: string;
+}
+
+export interface UsuarioListItem {
+  id: string;
+  email: string;
+  name: string;
+  active: boolean;
+  createdAt: string;
+  rol: RolSimple;
+  empleado: { id: number; nombre: string | null; apellido: string | null } | null;
+}
+
+export interface Permiso {
+  id: number;
+  codigo: string;
+  modulo: string;
+  accion: string;
+  descripcion: string | null;
+}
+
+export interface RolConPermisos {
+  id: number;
+  nombre: string;
+  descripcion: string | null;
+  activo: boolean;
+  permisos: { permiso: Permiso }[];
+}
+

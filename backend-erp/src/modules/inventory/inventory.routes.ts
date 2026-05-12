@@ -37,6 +37,7 @@ router.post("/ventas",            authorize("ventas:crear"),             invento
 router.get("/ventas",             authorize("ventas:ver"),               inventoryController.listVentas);
 
 // Stock
-router.get("/stock",              authorize("inventario:ver"),           inventoryController.getStockLevels);
+router.get("/stock",                   authorize("inventario:ver"),       inventoryController.getStockLevels);
+router.post("/stock/transferir",       authorize("inventario:editar"),    inventoryController.transferirStock);
 
 export { router as inventoryRoutes };

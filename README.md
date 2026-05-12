@@ -39,13 +39,13 @@ Módulo que emula conceptos del sistema inmunológico biológico para detectar y
 
 Detectores activos:
 
-| Tipo (`detectorType`) | Analogía biológica | Operación que lo activa | Severidades posibles |
-|----------------------|-------------------|------------------------|----------------------|
-| `STOCK_THRESHOLD` | PRR (receptor de patrón innato) | Escaneo completo + venta | HIGH, CRITICAL |
-| `UNUSUAL_MOVEMENT` | Células T de memoria | Escaneo completo | HIGH, MEDIUM |
-| `UNUSUAL_PURCHASE` | Respuesta adaptativa | Alta de compra | HIGH, CRITICAL |
-| `PURCHASE_PRICE_ANOMALY` | Señal de peligro económica | Alta de compra | MEDIUM |
-| `PRICE_ANOMALY` | Control de integridad de datos | Alta de producto | HIGH, CRITICAL |
+| Detector | Qué detecta | Por qué se usa | Analogía biológica | Se activa en | Severidades |
+|----------|-------------|----------------|--------------------|--------------|-------------|
+| `STOCK_THRESHOLD` | Productos con stock en cero o por debajo de 10 unidades en cualquier sucursal | Evitar quiebres de stock no detectados a tiempo. Sin alerta automática, una sucursal puede quedarse sin producto sin que nadie lo note hasta que llega una venta fallida | PRR — receptor de patrón innato: reacciona de forma inmediata ante una condición conocida, sin necesidad de aprender | Escaneo completo + cada venta registrada | HIGH (≤ 10 u.), CRITICAL (= 0) |
+| `UNUSUAL_MOVEMENT` | Compras o ventas individuales que triplican el promedio histórico de 30 días, o ráfagas de más de 5 operaciones del mismo producto en 24 horas | Detectar movimientos que se desvían del patrón habitual del negocio: puede indicar un error de carga, una operación duplicada o un evento extraordinario que requiere revisión | Células T de memoria: conocen el comportamiento "normal" y reaccionan ante desviaciones respecto a lo que ya vieron antes | Escaneo completo (últimas 24 h de actividad) | HIGH (≥ 3× promedio), MEDIUM (ráfaga > 5 ops) |
+| `UNUSUAL_PURCHASE` | Cantidades de compra que superan los umbrales estadísticos IQR calculados sobre los últimos 90 días del mismo producto | Prevenir ingresos masivos de stock por error o fraude. Usa IQR dinámico (no un múltiplo fijo) para adaptarse al volumen real de cada producto. Las compras extremas quedan bloqueadas hasta aprobación de un SUPER_ADMIN | Respuesta adaptativa: el sistema aprende el rango normal de cada producto y actúa de forma proporcional a la desviación detectada | Cada alta de compra (`POST /api/inventory/compras`) | HIGH (outlier moderado, compra se registra), CRITICAL (outlier extremo, compra bloqueada) |
+| `PURCHASE_PRICE_ANOMALY` | Precio unitario de la compra que supera el umbral IQR del historial de precios del mismo producto en los últimos 90 días | Alertar cuando se paga un precio fuera del rango habitual por un producto. Puede indicar un error de carga (precio en centavos en lugar de pesos) o condiciones de proveedor fuera de mercado | Señal de peligro económica: detecta cuando el "costo" de algo supera lo que el sistema considera saludable, activando una señal de alerta sin bloquear la operación | Cada alta de compra (`POST /api/inventory/compras`) | MEDIUM (umbral moderado), HIGH (umbral extremo) |
+| `PRICE_ANOMALY` | Productos recién creados con precio cero, o con un precio que multiplica por más de 10× el promedio de su tipo | Detectar errores de carga en el momento de la creación, antes de que el producto quede activo en el catálogo con un precio incorrecto que afecte ventas o reportes | Control de integridad de datos: verifica que cada nuevo elemento del catálogo sea consistente con el universo de datos existente | Cada alta de producto (`POST /api/inventory/products`) | HIGH (precio = 0 o ratio 10×–50×), CRITICAL (ratio > 50×) |
 
 ## Cuándo se genera una anomalía y qué hace el sistema
 

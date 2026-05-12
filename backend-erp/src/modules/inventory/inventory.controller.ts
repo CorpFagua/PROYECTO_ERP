@@ -58,8 +58,8 @@ const ventaSchema = z.object({
   idSucursal: z.number().int().positive().optional(),
   idEmpleado: z.number().int().positive().optional(),
   idProducto: z.number().int().positive(),
-  precio: z.number().positive(),
-  cantidad: z.number().int().positive(),
+  precio: z.number().positive().optional(), // ignorado: el backend usa el precio del catálogo
+  cantidad: z.number().int().positive().max(9999, "La cantidad no puede superar 9999 unidades por venta"),
 });
 
 // ─── Productos ───────────────────────────────────────────────
@@ -156,10 +156,19 @@ export async function listCompras(req: Request, res: Response, next: NextFunctio
 export async function registrarVenta(req: Request, res: Response, next: NextFunction) {
   try {
     const data = ventaSchema.parse(req.body);
+
+    // Resolver sucursal: del request, o del empleado en el JWT
+    const idSucursal = data.idSucursal ?? req.user?.sucursalId;
+    if (!idSucursal) {
+      res.status(422).json({ error: "La sucursal es obligatoria para registrar una venta" });
+      return;
+    }
+
     const venta = await inventoryService.registrarVenta({
       ...data,
       fecha: new Date(data.fecha),
       fechaEntrega: new Date(data.fechaEntrega),
+      idSucursal,
       idEmpleado: data.idEmpleado ?? req.user?.empleadoId,
     });
     res.status(201).json(venta);
@@ -170,9 +179,11 @@ export async function registrarVenta(req: Request, res: Response, next: NextFunc
 
 export async function listVentas(req: Request, res: Response, next: NextFunction) {
   try {
+    // Si el usuario tiene sucursal asignada (no es SUPER_ADMIN/ADMIN), forzar filtro
+    const sucursalForzada = req.user?.sucursalId;
     const ventas = await inventoryService.listVentas({
       idProducto: req.query.idProducto ? Number(req.query.idProducto) : undefined,
-      idSucursal: req.query.idSucursal ? Number(req.query.idSucursal) : undefined,
+      idSucursal: sucursalForzada ?? (req.query.idSucursal ? Number(req.query.idSucursal) : undefined),
       idEmpleado: req.query.idEmpleado ? Number(req.query.idEmpleado) : undefined,
       limit: req.query.limit ? Number(req.query.limit) : undefined,
     });
@@ -186,10 +197,33 @@ export async function listVentas(req: Request, res: Response, next: NextFunction
 
 export async function getStockLevels(req: Request, res: Response, next: NextFunction) {
   try {
+    // Si el usuario tiene sucursal asignada (no es SUPER_ADMIN/ADMIN), forzar filtro
+    const sucursalForzada = req.user?.sucursalId;
     const levels = await inventoryService.getStockLevels(
-      req.query.idSucursal ? Number(req.query.idSucursal) : undefined,
+      sucursalForzada ?? (req.query.idSucursal ? Number(req.query.idSucursal) : undefined),
     );
     res.json(levels);
+  } catch (err) {
+    next(err);
+  }
+}
+
+const transferirStockSchema = z.object({
+  idProducto: z.number().int().positive(),
+  idSucursalOrigen: z.number().int().positive(),
+  idSucursalDestino: z.number().int().positive(),
+  cantidad: z.number().int().positive().max(99999),
+});
+
+export async function transferirStock(req: Request, res: Response, next: NextFunction) {
+  try {
+    const data = transferirStockSchema.parse(req.body);
+    if (data.idSucursalOrigen === data.idSucursalDestino) {
+      res.status(422).json({ error: "Origen y destino no pueden ser la misma sucursal" });
+      return;
+    }
+    const result = await inventoryService.transferirStock(data);
+    res.json(result);
   } catch (err) {
     next(err);
   }

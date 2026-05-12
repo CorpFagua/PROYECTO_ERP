@@ -8,6 +8,7 @@ export interface AuthPayload {
   role: string;        // nombre del rol (ej. "VENDEDOR")
   permisos: string[];  // códigos de permiso (ej. ["inventario:ver", "ventas:crear"])
   empleadoId?: number;
+  sucursalId?: number; // sucursal del empleado (autocompletado en ventas)
 }
 
 declare global {
