@@ -3,21 +3,33 @@ import { prisma } from "../../../lib/prisma.js";
 import type { AnomalyDetector, AnomalyDetectorResult } from "./base-detector.js";
 
 /**
+ * Calcula media y desviación estándar poblacional de un array de valores.
+ */
+function computeStats(values: number[]): { mean: number; stddev: number } {
+  if (values.length === 0) return { mean: 0, stddev: 0 };
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance =
+    values.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / values.length;
+  return { mean, stddev: Math.sqrt(variance) };
+}
+
+/**
  * Detector de movimientos inusuales (Compras y Ventas).
  *
  * Analogía inmunológica (Células T de Memoria):
  * Analiza el comportamiento histórico de compras y ventas para detectar
- * desviaciones estadísticas significativas. Las "células de memoria" conocen
- * el patrón normal del sistema y disparan alertas cuando algo se desvía.
+ * desviaciones estadísticas significativas usando la regla 3σ: un movimiento
+ * es atípico cuando supera media + 3 desviaciones estándar del historial de
+ * 30 días, criterio estadístico estándar para la detección de outliers.
  *
  * Señales de peligro detectadas:
- * - Compra/venta con cantidad > 3x promedio histórico de 30 días → HIGH
- * - Ráfaga: > 5 compras del mismo producto en 24h               → MEDIUM
+ * - Compra/venta con cantidad > media + 3σ (outlier superior, 30 días) → HIGH
+ * - Ráfaga: > 5 compras del mismo producto en 24h                      → MEDIUM
  */
 export class UnusualMovementDetector implements AnomalyDetector {
   readonly type = "UNUSUAL_MOVEMENT";
   readonly description =
-    "Detecta compras y ventas que se desvían del patrón histórico de los últimos 30 días";
+    "Detecta compras y ventas que superan media + 3σ del historial de los últimos 30 días";
 
   async scan(): Promise<AnomalyDetectorResult[]> {
     const results: AnomalyDetectorResult[] = [];
@@ -40,30 +52,36 @@ export class UnusualMovementDetector implements AnomalyDetector {
     for (const [idProducto, compras] of comprasByProducto) {
       const producto = compras[0].producto;
 
-      const stats = await prisma.compra.aggregate({
+      // Obtener historial de 30 días para calcular media y desviación estándar
+      const historial = await prisma.compra.findMany({
         where: { idProducto, fecha: { gte: thirtyDaysAgo } },
-        _avg: { cantidad: true },
-        _count: true,
+        select: { cantidad: true },
       });
-      const avgCantidad = Number(stats._avg.cantidad ?? 0);
+      const valores = historial.map((h) => Number(h.cantidad));
+      const { mean, stddev } = computeStats(valores);
 
-      // Detectar cantidades individuales anómalas (> 3x promedio)
+      // Umbral estadístico superior: media + 3σ
+      const threshold = mean + 3 * stddev;
+
+      // Detectar cantidades individuales anómalas (> media + 3σ)
       for (const c of compras) {
         const cantidad = Number(c.cantidad);
-        if (avgCantidad > 0 && cantidad > avgCantidad * 3) {
-          const ratio = cantidad / avgCantidad;
+        if (mean > 0 && cantidad > threshold) {
+          const ratio = cantidad / mean;
           results.push({
             detected: true,
             detectorType: this.type,
             severity: "HIGH" as Severity,
-            description: `Compra inusual: ${cantidad} unidades de "${producto.nombre}" (promedio 30d: ${Math.round(avgCantidad)}, ${ratio.toFixed(1)}x superior)`,
+            description: `Compra inusual: ${cantidad} unidades de "${producto.nombre}" (umbral 3σ: ${Math.round(threshold)}, media: ${Math.round(mean)}, σ: ${Math.round(stddev)}, ratio: ${ratio.toFixed(1)}x)`,
             metadata: {
               tipo: "COMPRA",
               compraId: c.id,
               productoId: producto.id,
               nombreProducto: producto.nombre,
               cantidad,
-              promedio30d: Math.round(avgCantidad),
+              media30d: parseFloat(mean.toFixed(2)),
+              desviacionEstandar: parseFloat(stddev.toFixed(2)),
+              umbralEstadistico: parseFloat(threshold.toFixed(2)),
               ratio: parseFloat(ratio.toFixed(2)),
             },
           });
@@ -105,29 +123,35 @@ export class UnusualMovementDetector implements AnomalyDetector {
       const producto = ventas[0].producto;
       if (!producto) continue;
 
-      const stats = await prisma.venta.aggregate({
+      // Obtener historial de 30 días para calcular media y desviación estándar
+      const historial = await prisma.venta.findMany({
         where: { idProducto, fecha: { gte: thirtyDaysAgo } },
-        _avg: { cantidad: true },
-        _count: true,
+        select: { cantidad: true },
       });
-      const avgCantidad = Number(stats._avg.cantidad ?? 0);
+      const valores = historial.map((h) => Number(h.cantidad));
+      const { mean, stddev } = computeStats(valores);
+
+      // Umbral estadístico superior: media + 3σ
+      const threshold = mean + 3 * stddev;
 
       for (const v of ventas) {
         const cantidad = Number(v.cantidad);
-        if (avgCantidad > 0 && cantidad > avgCantidad * 3) {
-          const ratio = cantidad / avgCantidad;
+        if (mean > 0 && cantidad > threshold) {
+          const ratio = cantidad / mean;
           results.push({
             detected: true,
             detectorType: this.type,
             severity: "HIGH" as Severity,
-            description: `Venta inusual: ${cantidad} unidades de "${producto.nombre}" (promedio 30d: ${Math.round(avgCantidad)}, ${ratio.toFixed(1)}x superior)`,
+            description: `Venta inusual: ${cantidad} unidades de "${producto.nombre}" (umbral 3σ: ${Math.round(threshold)}, media: ${Math.round(mean)}, σ: ${Math.round(stddev)}, ratio: ${ratio.toFixed(1)}x)`,
             metadata: {
               tipo: "VENTA",
               ventaId: v.id,
               productoId: producto.id,
               nombreProducto: producto.nombre,
               cantidad,
-              promedio30d: Math.round(avgCantidad),
+              media30d: parseFloat(mean.toFixed(2)),
+              desviacionEstandar: parseFloat(stddev.toFixed(2)),
+              umbralEstadistico: parseFloat(threshold.toFixed(2)),
               ratio: parseFloat(ratio.toFixed(2)),
             },
           });

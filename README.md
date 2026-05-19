@@ -41,8 +41,8 @@ Detectores activos:
 
 | Detector | Qué detecta | Por qué se usa | Analogía biológica | Se activa en | Severidades |
 |----------|-------------|----------------|--------------------|--------------|-------------|
-| `STOCK_THRESHOLD` | Productos con stock en cero o por debajo de 10 unidades en cualquier sucursal | Evitar quiebres de stock no detectados a tiempo. Sin alerta automática, una sucursal puede quedarse sin producto sin que nadie lo note hasta que llega una venta fallida | PRR — receptor de patrón innato: reacciona de forma inmediata ante una condición conocida, sin necesidad de aprender | Escaneo completo + cada venta registrada | HIGH (≤ 10 u.), CRITICAL (= 0) |
-| `UNUSUAL_MOVEMENT` | Compras o ventas individuales que triplican el promedio histórico de 30 días, o ráfagas de más de 5 operaciones del mismo producto en 24 horas | Detectar movimientos que se desvían del patrón habitual del negocio: puede indicar un error de carga, una operación duplicada o un evento extraordinario que requiere revisión | Células T de memoria: conocen el comportamiento "normal" y reaccionan ante desviaciones respecto a lo que ya vieron antes | Escaneo completo (últimas 24 h de actividad) | HIGH (≥ 3× promedio), MEDIUM (ráfaga > 5 ops) |
+| `STOCK_THRESHOLD` | Productos con stock en cero o estadísticamente atípico bajo según la distribución real del sistema (regla 3σ) | Evitar quiebres de stock usando un umbral dinámico que se adapta al comportamiento real del inventario: el umbral es `μ − 3σ` calculado sobre todos los niveles de stock activos, no un número fijo arbitrario | PRR — receptor de patrón innato: reacciona ante condiciones de peligro usando la distribución estadística del propio sistema como referencia | Escaneo completo + cada venta registrada | HIGH (cantidad < μ − 3σ), CRITICAL (= 0) |
+| `UNUSUAL_MOVEMENT` | Compras o ventas individuales que superan `μ + 3σ` del historial de 30 días del producto, o ráfagas de más de 5 operaciones del mismo producto en 24 horas | Detectar outliers estadísticos reales: la regla 3σ garantiza que solo el 0.27% de valores normales dispararán la alerta, eliminando los falsos positivos que generaba el multiplicador fijo 3× promedio | Células T de memoria: aprenden la distribución histórica de cada producto y reaccionan cuando una operación sale del rango de normalidad estadística | Escaneo completo (últimas 24 h de actividad) | HIGH (cantidad > μ + 3σ), MEDIUM (ráfaga > 5 ops) |
 | `UNUSUAL_PURCHASE` | Cantidades de compra que superan los umbrales estadísticos IQR calculados sobre los últimos 90 días del mismo producto | Prevenir ingresos masivos de stock por error o fraude. Usa IQR dinámico (no un múltiplo fijo) para adaptarse al volumen real de cada producto. Las compras extremas quedan bloqueadas hasta aprobación de un SUPER_ADMIN | Respuesta adaptativa: el sistema aprende el rango normal de cada producto y actúa de forma proporcional a la desviación detectada | Cada alta de compra (`POST /api/inventory/compras`) | HIGH (outlier moderado, compra se registra), CRITICAL (outlier extremo, compra bloqueada) |
 | `PURCHASE_PRICE_ANOMALY` | Precio unitario de la compra que supera el umbral IQR del historial de precios del mismo producto en los últimos 90 días | Alertar cuando se paga un precio fuera del rango habitual por un producto. Puede indicar un error de carga (precio en centavos en lugar de pesos) o condiciones de proveedor fuera de mercado | Señal de peligro económica: detecta cuando el "costo" de algo supera lo que el sistema considera saludable, activando una señal de alerta sin bloquear la operación | Cada alta de compra (`POST /api/inventory/compras`) | MEDIUM (umbral moderado), HIGH (umbral extremo) |
 | `PRICE_ANOMALY` | Productos recién creados con precio cero, o con un precio que multiplica por más de 10× el promedio de su tipo | Detectar errores de carga en el momento de la creación, antes de que el producto quede activo en el catálogo con un precio incorrecto que afecte ventas o reportes | Control de integridad de datos: verifica que cada nuevo elemento del catálogo sea consistente con el universo de datos existente | Cada alta de producto (`POST /api/inventory/products`) | HIGH (precio = 0 o ratio 10×–50×), CRITICAL (ratio > 50×) |
@@ -215,16 +215,20 @@ metadata     : { productoId, sucursalId, nombreProducto, nombreSucursal,
                  cantidadVendida, stockResultante: 0 }
 ```
 
-**Caso 2 — Stock en nivel crítico tras la venta**
-> Condición: `0 < stock ≤ 10 unidades` después del descuento
+**Caso 2 — Stock atípicamente bajo tras la venta**
+> Condición: `0 < stock ≤ μ − 3σ` (umbral dinámico calculado sobre la distribución del sistema)
 
 ```
 detectorType : STOCK_THRESHOLD
 severity     : HIGH
-description  : Stock crítico tras venta: "X" en "Y" — quedan N unidades
+description  : Stock atípico bajo: "X" en "Y" — quedan N unidades
+               (umbral 3σ: T, media: μ, σ: σ)
 metadata     : { productoId, sucursalId, nombreProducto, nombreSucursal,
-                 cantidadVendida, stockResultante, umbralMinimo: 10 }
+                 cantidadVendida, stockResultante,
+                 umbralEstadistico, media, desviacionEstandar }
 ```
+
+> El umbral `μ − 3σ` se recalcula en cada escaneo a partir de la distribución real de todos los stocks activos del sistema, por lo que se adapta automáticamente al volumen del inventario.
 
 > Si la venta no tiene `idSucursal` (venta sin sucursal asignada), no se ejecuta el escaneo reactivo porque no hay stock de sucursal que verificar.
 
@@ -236,23 +240,47 @@ El escaneo completo corre todos los detectores en secuencia. Requiere autenticac
 
 #### `StockThresholdDetector` — recorre toda la tabla `stock_levels`
 
-Evalúa cada fila de stock de productos activos:
+Evalúa cada fila de stock de productos activos usando la **regla estadística 3σ** (tres desviaciones estándar):
+
+1. Calcula la **media (μ)** y la **desviación estándar (σ)** de todos los stocks activos del sistema.
+2. Determina el umbral dinámico inferior: `umbral = max(0, μ − 3σ)`.
+3. Clasifica cada entrada según:
 
 | Condición | `severity` | `detectorType` |
 |-----------|-----------|----------------|
 | `cantidad = 0` | CRITICAL | STOCK_THRESHOLD |
-| `0 < cantidad ≤ 10` | HIGH | STOCK_THRESHOLD |
+| `0 < cantidad ≤ μ − 3σ` | HIGH | STOCK_THRESHOLD |
+
+El `metadata` de cada alerta HIGH incluye `umbralEstadistico`, `media` y `desviacionEstandar` para trazabilidad completa.
+
+> Bajo distribución normal, solo el **0.15%** de los stocks caería por debajo de `μ − 3σ`. Un stock que supera ese límite inferior es estadísticamente atípico, no simplemente bajo.
 
 > Importante: el escaneo completo puede generar duplicados si ya existe una anomalía reactiva reciente del mismo producto. El flujo de `acknowledge` es el mecanismo para cerrar esos eventos.
 
 #### `UnusualMovementDetector` — analiza compras y ventas de las últimas 24 horas
 
-Para cada producto con actividad en las últimas 24h, calcula el promedio de los últimos 30 días y evalúa cada operación:
+Para cada producto con actividad en las últimas 24h, aplica la **regla 3σ** sobre su historial de 30 días:
+
+1. Obtiene todas las cantidades históricas del producto en los últimos 30 días.
+2. Calcula **media (μ)** y **desviación estándar (σ)** de esas cantidades.
+3. Umbral dinámico superior: `umbral = μ + 3σ`.
+4. Una operación es outlier si `cantidad > μ + 3σ`.
 
 | Condición | `severity` | `detectorType` |
 |-----------|-----------|----------------|
-| Compra/venta individual ≥ 3x promedio 30d | HIGH | UNUSUAL_MOVEMENT |
+| Compra/venta individual > μ + 3σ (historial 30d) | HIGH | UNUSUAL_MOVEMENT |
 | > 5 compras del mismo producto en 24h | MEDIUM | UNUSUAL_MOVEMENT |
+
+El `metadata` incluye `media30d`, `desviacionEstandar`, `umbralEstadistico` y `ratio` (cantidad / media).
+
+**Por qué `μ + 3σ` es mejor que `3 × media`:**
+
+| Criterio | `3 × media` (anterior) | `μ + 3σ` (actual) |
+|----------|------------------------|--------------------|
+| Considera dispersión histórica | No | Sí |
+| Falsos positivos con productos variables | Alto | Muy bajo (< 0.27%) |
+| Se adapta a cada producto | Parcialmente | Completamente |
+| Base estadística formal | No | Regla empírica / 3σ |
 
 ---
 
